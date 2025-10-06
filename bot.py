@@ -7,6 +7,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime
 import threading
 import logging
+import asyncio
 
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -48,7 +49,6 @@ db_lock = threading.Lock()
 # Simulação de busca automática de promoções
 def fetch_promotions():
     # Aqui você pode implementar scraping da Amazon Brasil
-    # Por exemplo: https://www.amazon.com.br/gp/goldbox
     # Para simplificar, vamos retornar um produto de exemplo
     return [{
         "title": "Produto Exemplo",
@@ -84,14 +84,18 @@ async def post_promotions(bot: Bot):
         except Exception as e:
             logger.exception("Erro ao postar promoção: %s", e)
 
-async def scheduled_job(application):
-    await post_promotions(application.bot)
-
+# Scheduler corrigido
 def start_scheduler(application):
     if sched.get_job("post_job"):
         sched.remove_job("post_job")
-    sched.add_job(lambda: application.create_task(scheduled_job(application)),
-                  'interval', minutes=INTERVAL_MIN, id="post_job", next_run_time=None)
+    
+    async def job():
+        await post_promotions(application.bot)
+    
+    def run_job():
+        asyncio.create_task(job())
+    
+    sched.add_job(run_job, 'interval', minutes=INTERVAL_MIN, id="post_job", next_run_time=None)
     logger.info("Scheduler iniciado")
 
 # Comandos Telegram

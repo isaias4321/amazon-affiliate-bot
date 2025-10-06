@@ -11,7 +11,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # ---------- CONFIG ----------
-BOT_TOKEN = "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A"  # Substitua pelo seu token
+BOT_TOKEN = "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A"
 GROUP_ID = os.environ.get("GROUP_ID", "-4983279500")
 AFFILIATE_TAG = os.environ.get("AFFILIATE_TAG", "isaias06f-20")
 INTERVAL_MIN = int(os.environ.get("INTERVAL_MIN", "5"))
@@ -20,10 +20,12 @@ DB_PATH = os.environ.get("DB_PATH", "offers.db")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Scheduler global
 sched = BackgroundScheduler()
 sched.start()
 
-# Database
+# ---------- DATABASE ----------
 def init_db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     c = conn.cursor()
@@ -43,8 +45,9 @@ def init_db():
 conn = init_db()
 db_lock = threading.Lock()
 
-# Simulação de busca automática de promoções
+# ---------- FUNÇÕES DE PROMOÇÕES ----------
 def fetch_promotions():
+    """Simulação de busca de produtos"""
     return [{
         "title": "Produto Exemplo",
         "url": "https://www.amazon.com.br/dp/B08EXAMPLE",
@@ -59,9 +62,9 @@ def build_affiliate_url(url):
         return f"{url}{sep}tag={AFFILIATE_TAG}"
     return url
 
-# Função que envia as promoções
 async def post_promotions():
-    bot = Bot(token=BOT_TOKEN)  # Bot criado dentro do job
+    """Posta promoções no grupo Telegram"""
+    bot = Bot(token=BOT_TOKEN)  # Criar o bot localmente evita weakref
     promotions = fetch_promotions()
     for item in promotions:
         url = item["url"]
@@ -83,18 +86,25 @@ async def post_promotions():
         except Exception as e:
             logger.exception("Erro ao postar promoção: %s", e)
 
-# Scheduler seguro
+# ---------- SCHEDULER ----------
 def start_scheduler():
+    """Inicia o job do apscheduler sem Application"""
     if sched.get_job("post_job"):
         sched.remove_job("post_job")
 
     def run_job():
         asyncio.create_task(post_promotions())
 
-    sched.add_job(run_job, 'interval', minutes=INTERVAL_MIN)
+    sched.add_job(run_job, 'interval', minutes=INTERVAL_MIN, id="post_job")
     logger.info("Scheduler iniciado")
 
-# Comandos Telegram
+def stop_scheduler():
+    """Para o job do apscheduler"""
+    if sched.get_job("post_job"):
+        sched.remove_job("post_job")
+        logger.info("Scheduler parado")
+
+# ---------- COMANDOS TELEGRAM ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bot de ofertas Amazon iniciado!")
 
@@ -103,16 +113,16 @@ async def start_posting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Postagens automáticas ativadas a cada {INTERVAL_MIN} minutos.")
 
 async def stop_posting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if sched.get_job("post_job"):
-        sched.remove_job("post_job")
-    await update.message.reply_text("Postagens paradas.")
+    stop_scheduler()
+    await update.message.reply_text("Postagens automáticas desativadas.")
 
 async def postnow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await post_promotions()
     await update.message.reply_text("Post realizado.")
 
-# Inicialização do bot
+# ---------- INICIALIZAÇÃO DO BOT ----------
 def main():
+    # Criar Application sem usar JobQueue
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("start_posting", start_posting_cmd))

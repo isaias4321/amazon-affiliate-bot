@@ -84,17 +84,18 @@ async def post_promotions(bot: Bot):
         except Exception as e:
             logger.exception("Erro ao postar promoção: %s", e)
 
-# Scheduler corrigido
-def start_scheduler(application):
+# Scheduler corrigido (sem weak reference)
+def start_scheduler():
     if sched.get_job("post_job"):
         sched.remove_job("post_job")
     
     async def job():
-        await post_promotions(application.bot)
-    
+        bot = Bot(token=BOT_TOKEN)  # Criamos o bot aqui
+        await post_promotions(bot)
+
     def run_job():
         asyncio.create_task(job())
-    
+
     sched.add_job(run_job, 'interval', minutes=INTERVAL_MIN, id="post_job", next_run_time=None)
     logger.info("Scheduler iniciado")
 
@@ -103,7 +104,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bot de ofertas Amazon iniciado!")
 
 async def start_posting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    start_scheduler(context.application)
+    start_scheduler()
     await update.message.reply_text(f"Postagens automáticas ativadas a cada {INTERVAL_MIN} minutos.")
 
 async def stop_posting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -111,17 +112,4 @@ async def stop_posting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sched.remove_job("post_job")
     await update.message.reply_text("Postagens paradas.")
 
-async def postnow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await post_promotions(context.application.bot)
-    await update.message.reply_text("Post realizado.")
-
-def main():
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("start_posting", start_posting_cmd))
-    application.add_handler(CommandHandler("stop_posting", stop_posting_cmd))
-    application.add_handler(CommandHandler("postnow", postnow_cmd))
-    application.run_polling()
-
-if __name__ == "__main__":
-    main()
+async def postnow_cmd(update: Update, context: Contex_

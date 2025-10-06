@@ -4,14 +4,14 @@ import sqlite3
 import requests
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, Update
+from telegram.constants import Bot, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode
+from telegram.constants import ApplicationBuilder, CommandHandler, ContextTypes, Update
 from datetime import datetime
 import threading
 import logging
 
 # ---------- CONFIG ----------
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
+BOT_TOKEN = os.environ.get("8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A")
 GROUP_ID = os.environ.get("GROUP_ID", "-4983279500")
 AFFILIATE_TAG = os.environ.get("AFFILIATE_TAG", "isaias06f-20")
 INTERVAL_MIN = int(os.environ.get("INTERVAL_MIN", "5"))

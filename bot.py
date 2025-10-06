@@ -4,14 +4,16 @@ import sqlite3
 import requests
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
-from telegram.constants import Bot, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode
-from telegram.constants import ApplicationBuilder, CommandHandler, ContextTypes, Update
 from datetime import datetime
 import threading
 import logging
 
+from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+
 # ---------- CONFIG ----------
-BOT_TOKEN = os.environ.get("8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A")
+BOT_TOKEN = "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A"  # Substitua pelo seu token real
 GROUP_ID = os.environ.get("GROUP_ID", "-4983279500")
 AFFILIATE_TAG = os.environ.get("AFFILIATE_TAG", "isaias06f-20")
 INTERVAL_MIN = int(os.environ.get("INTERVAL_MIN", "5"))
@@ -88,7 +90,7 @@ async def scheduled_job(application):
 def start_scheduler(application):
     if sched.get_job("post_job"):
         sched.remove_job("post_job")
-    sched.add_job(lambda: application.create_background_task(scheduled_job(application)),
+    sched.add_job(lambda: application.create_task(scheduled_job(application)),
                   'interval', minutes=INTERVAL_MIN, id="post_job", next_run_time=None)
     logger.info("Scheduler iniciado")
 

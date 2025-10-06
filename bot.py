@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sqlite3
-import requests
-from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
-from datetime import datetime
 import threading
 import logging
 import asyncio
@@ -14,7 +11,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # ---------- CONFIG ----------
-BOT_TOKEN = "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A"  # Substitua pelo seu token real
+BOT_TOKEN = "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A"  # Substitua pelo seu token
 GROUP_ID = os.environ.get("GROUP_ID", "-4983279500")
 AFFILIATE_TAG = os.environ.get("AFFILIATE_TAG", "isaias06f-20")
 INTERVAL_MIN = int(os.environ.get("INTERVAL_MIN", "5"))
@@ -48,8 +45,7 @@ db_lock = threading.Lock()
 
 # Simulação de busca automática de promoções
 def fetch_promotions():
-    # Aqui você pode implementar scraping da Amazon Brasil
-    # Para simplificar, vamos retornar um produto de exemplo
+    # Aqui você pode implementar scraping real da Amazon
     return [{
         "title": "Produto Exemplo",
         "url": "https://www.amazon.com.br/dp/B08EXAMPLE",
@@ -64,7 +60,9 @@ def build_affiliate_url(url):
         return f"{url}{sep}tag={AFFILIATE_TAG}"
     return url
 
-async def post_promotions(bot: Bot):
+# Função que envia as promoções
+async def post_promotions():
+    bot = Bot(token=BOT_TOKEN)  # Cria o bot aqui, dentro do job
     promotions = fetch_promotions()
     for item in promotions:
         url = item["url"]
@@ -77,37 +75,24 @@ async def post_promotions(bot: Bot):
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Comprar / Ver Oferta", url=aff_url)]])
         try:
             if image:
-                await bot.send_photo(
-                    chat_id=GROUP_ID,
-                    photo=image,
-                    caption=msg_text,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=keyboard
-                )
+                await bot.send_photo(chat_id=GROUP_ID, photo=image, caption=msg_text,
+                                     parse_mode=ParseMode.HTML, reply_markup=keyboard)
             else:
-                await bot.send_message(
-                    chat_id=GROUP_ID,
-                    text=msg_text,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=keyboard
-                )
+                await bot.send_message(chat_id=GROUP_ID, text=msg_text,
+                                       parse_mode=ParseMode.HTML, reply_markup=keyboard)
             logger.info(f"Oferta postada: {title}")
         except Exception as e:
             logger.exception("Erro ao postar promoção: %s", e)
 
-# Scheduler corrigido (sem weak reference)
+# Scheduler seguro, sem passar Application
 def start_scheduler():
     if sched.get_job("post_job"):
         sched.remove_job("post_job")
-    
-    async def job():
-        bot = Bot(token=BOT_TOKEN)  # Criamos o bot aqui
-        await post_promotions(bot)
 
     def run_job():
-        asyncio.create_task(job())
+        asyncio.create_task(post_promotions())
 
-    sched.add_job(run_job, 'interval', minutes=INTERVAL_MIN, id="post_job", next_run_time=None)
+    sched.add_job(run_job, 'interval', minutes=INTERVAL_MIN, id="post_job")
     logger.info("Scheduler iniciado")
 
 # Comandos Telegram
@@ -124,10 +109,10 @@ async def stop_posting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Postagens paradas.")
 
 async def postnow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    bot = context.application.bot
-    await post_promotions(bot)
+    await post_promotions()
     await update.message.reply_text("Post realizado.")
 
+# Inicialização do bot
 def main():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))

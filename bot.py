@@ -77,9 +77,20 @@ async def post_promotions(bot: Bot):
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Comprar / Ver Oferta", url=aff_url)]])
         try:
             if image:
-                await bot.send_photo(chat_id=GROUP_ID, photo=image, caption=msg_text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+                await bot.send_photo(
+                    chat_id=GROUP_ID,
+                    photo=image,
+                    caption=msg_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard
+                )
             else:
-                await bot.send_message(chat_id=GROUP_ID, text=msg_text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+                await bot.send_message(
+                    chat_id=GROUP_ID,
+                    text=msg_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard
+                )
             logger.info(f"Oferta postada: {title}")
         except Exception as e:
             logger.exception("Erro ao postar promoção: %s", e)
@@ -112,4 +123,18 @@ async def stop_posting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sched.remove_job("post_job")
     await update.message.reply_text("Postagens paradas.")
 
-async def postnow_cmd(update: Update, context: Contex_
+async def postnow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    bot = context.application.bot
+    await post_promotions(bot)
+    await update.message.reply_text("Post realizado.")
+
+def main():
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("start_posting", start_posting_cmd))
+    application.add_handler(CommandHandler("stop_posting", stop_posting_cmd))
+    application.add_handler(CommandHandler("postnow", postnow_cmd))
+    application.run_polling()
+
+if __name__ == "__main__":
+    main()

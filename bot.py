@@ -11,7 +11,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # ---------- CONFIG ----------
-BOT_TOKEN = "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A"  # Substitua pelo seu token
+BOT_TOKEN = "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A"  # Substitua pelo seu token real
 GROUP_ID = os.environ.get("GROUP_ID", "-4983279500")
 AFFILIATE_TAG = os.environ.get("AFFILIATE_TAG", "isaias06f-20")
 INTERVAL_MIN = int(os.environ.get("INTERVAL_MIN", "5"))
@@ -62,7 +62,7 @@ def build_affiliate_url(url):
 
 # Função que envia as promoções
 async def post_promotions():
-    bot = Bot(token=BOT_TOKEN)  # Cria o bot aqui, dentro do job
+    bot = Bot(token=BOT_TOKEN)  # Cria o bot dentro do job
     promotions = fetch_promotions()
     for item in promotions:
         url = item["url"]
@@ -84,7 +84,7 @@ async def post_promotions():
         except Exception as e:
             logger.exception("Erro ao postar promoção: %s", e)
 
-# Scheduler seguro, sem passar Application
+# Scheduler seguro
 def start_scheduler():
     if sched.get_job("post_job"):
         sched.remove_job("post_job")
@@ -92,7 +92,7 @@ def start_scheduler():
     def run_job():
         asyncio.create_task(post_promotions())
 
-    sched.add_job(run_job, 'interval', minutes=INTERVAL_MIN, id="post_job")
+    sched.add_job(run_job, 'interval', minutes=INTERVAL_MIN)
     logger.info("Scheduler iniciado")
 
 # Comandos Telegram
@@ -123,3 +123,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

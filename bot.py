@@ -11,7 +11,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # ---------- CONFIG ----------
-BOT_TOKEN = "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A"  # Substitua pelo seu token real
+BOT_TOKEN = "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A"  # Substitua pelo seu token
 GROUP_ID = os.environ.get("GROUP_ID", "-4983279500")
 AFFILIATE_TAG = os.environ.get("AFFILIATE_TAG", "isaias06f-20")
 INTERVAL_MIN = int(os.environ.get("INTERVAL_MIN", "5"))
@@ -45,7 +45,6 @@ db_lock = threading.Lock()
 
 # Simulação de busca automática de promoções
 def fetch_promotions():
-    # Aqui você pode implementar scraping real da Amazon
     return [{
         "title": "Produto Exemplo",
         "url": "https://www.amazon.com.br/dp/B08EXAMPLE",
@@ -62,7 +61,7 @@ def build_affiliate_url(url):
 
 # Função que envia as promoções
 async def post_promotions():
-    bot = Bot(token=BOT_TOKEN)  # Cria o bot dentro do job
+    bot = Bot(token=BOT_TOKEN)  # Bot criado dentro do job
     promotions = fetch_promotions()
     for item in promotions:
         url = item["url"]
@@ -123,4 +122,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

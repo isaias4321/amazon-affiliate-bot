@@ -1,23 +1,31 @@
-# 🤖 Amazon Affiliate Bot (Brasil)
-Um bot automático que publica promoções da Amazon Brasil no Telegram com seu link de afiliado.
+# 🤖 Telegram Amazon Deals Bot
 
-## 🚀 Como usar
+Bot que publica automaticamente promoções da Amazon no seu grupo do Telegram.
 
-### 1️⃣ Crie seu bot no Telegram
-Use o **BotFather** e obtenha o `BOT_TOKEN`.
+## ⚙️ Configuração
 
-### 2️⃣ Crie um grupo e adicione seu bot
-- Adicione o bot como administrador.
-- Copie o ID do grupo (use o @RawDataBot para descobrir).
+1. Crie um bot no [@BotFather](https://t.me/BotFather) e copie o token.
+2. Configure as variáveis de ambiente:
+   ```bash
+   BOT_TOKEN=seu_token_aqui
+   GROUP_ID=-4983279500
+   AFFILIATE_TAG=isaias06f-20
+   INTERVAL_MIN=5
+   ```
+3. Instale as dependências:
+   ```bash
+   pip install -r requirements.txt
+   ```
+4. Inicie o bot:
+   ```bash
+   python bot.py
+   ```
 
-### 3️⃣ Configure as variáveis de ambiente (no Railway ou localmente)
-| Nome | Descrição | Exemplo |
-|------|------------|----------|
-| BOT_TOKEN | Token do bot do BotFather | 123456:ABCDEF... |
-| GROUP_ID | ID do grupo onde postar | -4983279500 |
-| AFFILIATE_TAG | Seu código de afiliado Amazon | isaias06f-20 |
-| INTERVAL_MIN | Intervalo entre postagens (minutos) | 5 |
+## 🚀 Deploy no Railway
+- Faça login em [railway.app](https://railway.app/)
+- Conecte seu GitHub com esses arquivos
+- Adicione as variáveis no painel “Environment”
+- Clique em **Deploy** e pronto!
 
-### 4️⃣ Instale dependências
-```bash
-pip install -r requirements.txt
+---
+🧠 Autor: Isaías Maia

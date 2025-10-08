@@ -4,13 +4,14 @@ import sqlite3
 import requests
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, Update
 import threading
 import logging
 
 # ---------- CONFIG ----------
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")  # Corrigido aqui!
 GROUP_ID = os.environ.get("GROUP_ID", "-4983279500")
 AFFILIATE_TAG = os.environ.get("AFFILIATE_TAG", "isaias06f-20")
 INTERVAL_MIN = int(os.environ.get("INTERVAL_MIN", "5"))
@@ -51,7 +52,7 @@ def fetch_promotions():
 
         promotions = []
         deal_items = soup.find_all("div", class_="DealGridItem-module__dealItem")
-        for item in deal_items[:5]:  # pegar até 5 produtos por rodada
+        for item in deal_items[:5]:
             title_tag = item.find("span", class_="DealContent-module__truncate_sWbxETx42ZPStTc9jwySW")
             price_tag = item.find("span", class_="PriceBlock__PriceString")
             url_tag = item.find("a", href=True)
@@ -87,7 +88,7 @@ async def post_promotions(bot: Bot):
             c = conn.cursor()
             c.execute("SELECT 1 FROM offers WHERE url=?", (url,))
             if c.fetchone():
-                continue  # já postado
+                continue
             c.execute("INSERT INTO offers (url, title, price_original, price_deal, added_at) VALUES (?, ?, ?, ?, datetime('now'))",
                       (url, title, price_original, price_deal))
             conn.commit()
@@ -130,6 +131,8 @@ async def postnow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📤 Post realizado manualmente.")
 
 def main():
+    if not BOT_TOKEN:
+        raise ValueError("❌ BOT_TOKEN não definido nas variáveis de ambiente!")
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("start_posting", start_posting_cmd))

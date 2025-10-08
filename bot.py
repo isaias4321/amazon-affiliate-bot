@@ -4,14 +4,14 @@ import sqlite3
 import requests
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import threading
 import logging
 
 # ---------- CONFIG ----------
-BOT_TOKEN = os.environ.get("BOT_TOKEN")  # Corrigido aqui!
+BOT_TOKEN = os.environ.get("BOT_TOKEN")  # Token do BotFather
 GROUP_ID = os.environ.get("GROUP_ID", "-4983279500")
 AFFILIATE_TAG = os.environ.get("AFFILIATE_TAG", "isaias06f-20")
 INTERVAL_MIN = int(os.environ.get("INTERVAL_MIN", "5"))
@@ -89,8 +89,10 @@ async def post_promotions(bot: Bot):
             c.execute("SELECT 1 FROM offers WHERE url=?", (url,))
             if c.fetchone():
                 continue
-            c.execute("INSERT INTO offers (url, title, price_original, price_deal, added_at) VALUES (?, ?, ?, ?, datetime('now'))",
-                      (url, title, price_original, price_deal))
+            c.execute(
+                "INSERT INTO offers (url, title, price_original, price_deal, added_at) VALUES (?, ?, ?, ?, datetime('now'))",
+                (url, title, price_original, price_deal)
+            )
             conn.commit()
 
         msg_text = f"<b>{title}</b>\n💰 {price_deal}"

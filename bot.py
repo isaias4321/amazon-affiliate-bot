@@ -3,7 +3,6 @@ import os
 import sqlite3
 import requests
 from bs4 import BeautifulSoup
-from apscheduler.schedulers.background import BackgroundScheduler
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -22,8 +21,6 @@ URL_AMAZON = "https://www.amazon.com.br/gp/goldbox"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-sched = BackgroundScheduler()
-sched.start()
 
 # Database
 def init_db():
@@ -106,30 +103,29 @@ async def post_promotions(bot: Bot):
         except Exception as e:
             logger.exception("Erro ao postar promoção: %s", e)
 
-async def scheduled_job(application):
-    await post_promotions(application.bot)
+# Scheduler assíncrono seguro
+async def scheduler_loop(application):
+    while True:
+        try:
+            await post_promotions(application.bot)
+        except Exception as e:
+            logger.exception("Erro no job agendado: %s", e)
+        await asyncio.sleep(INTERVAL_MIN * 60)
 
-def start_scheduler(application):
-    if sched.get_job("post_job"):
-        sched.remove_job("post_job")
-
-    def job_wrapper():
-        asyncio.create_task(scheduled_job(application))  # correção completa
-    sched.add_job(job_wrapper, 'interval', minutes=INTERVAL_MIN, id="post_job", next_run_time=None)
-    logger.info("Scheduler iniciado")
+async def start_scheduler(application):
+    asyncio.create_task(scheduler_loop(application))
+    logger.info(f"Scheduler iniciado a cada {INTERVAL_MIN} minutos")
 
 # Comandos Telegram
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot de ofertas Amazon iniciado!")
 
 async def start_posting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    start_scheduler(context.application)
+    await start_scheduler(context.application)
     await update.message.reply_text(f"🤖 Postagens automáticas ativadas a cada {INTERVAL_MIN} minutos.")
 
 async def stop_posting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if sched.get_job("post_job"):
-        sched.remove_job("post_job")
-    await update.message.reply_text("⛔ Postagens paradas.")
+    await update.message.reply_text("⛔ Postagens paradas. (reinicie o bot para parar o loop)")
 
 async def postnow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await post_promotions(context.application.bot)

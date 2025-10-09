@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """
-bot.py — Telegram affiliate deals bot (webhook + scheduler)
-- Webhook (aiohttp) para evitar conflitos de polling
+bot.py — Telegram Amazon Deals Bot (Webhook + Scheduler)
+- Webhook (aiohttp) for Railway (não usa polling)
 - Scheduler assíncrono que posta ofertas a cada INTERVAL_MIN minutos (exato)
-- Filtra apenas produtos com desconto nas categorias desejadas
-- Mostra % OFF e adiciona tag de afiliado automaticamente
-- Banco SQLite para evitar repostagens
+- Filtra apenas produtos com desconto nas categorias Games e Eletrônicos
+- Mostra % OFF ao lado do preço e envia imagem + botão com link de afiliado
+- Evita repostagens usando SQLite
 
-Configure no Railway:
-  BOT_TOKEN  -> token do BotFather
-  (opcional) AFFILIATE_TAG -> isaias06f-20
-  (opcional) INTERVAL_MIN -> 5
-  PORT -> Railway fornece automaticamente (o código usa PORT ou 8080)
-  WEBHOOK_BASE_URL -> URL pública do seu projeto (ex: https://meu-bot.up.railway.app)
-Se preferir usar as constantes fixas, o código já vem com os valores que você passou.
+INSTRUÇÕES RÁPIDAS:
+- Defina variáveis de ambiente no Railway:
+    BOT_TOKEN          (obrigatório)
+    GROUP_ID           (opcional, padrão -4983279500)
+    AFFILIATE_TAG      (opcional, padrão isaias06f-20)
+    INTERVAL_MIN       (opcional, padrão 2)
+    WEBHOOK_BASE_URL   (obrigatório: URL pública do seu serviço, ex. https://seu-projeto.up.railway.app)
+    PORT               (opcional, Railway fornece; padrão 8080)
+- Deploy no Railway. Ao iniciar, o bot tentará registrar o webhook e iniciar o scheduler automaticamente.
 """
 
 from __future__ import annotations
@@ -32,30 +34,22 @@ from telegram.constants import ParseMode
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # ---------------- CONFIGURAÇÕES ----------------
-# Você informou: chat_id -4983279500 e uma URL Railway.
-# Se preferir, substitua os valores abaixo por os.getenv(...) no Railway.
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # obrigatória nas variáveis do Railway
-AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
-INTERVAL_MIN = int(os.getenv("INTERVAL_MIN", "5"))
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # obrigatório
+GROUP_ID = os.getenv("GROUP_ID", "-4983279500")  # seu grupo
+AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")  # seu afiliado
+INTERVAL_MIN = int(os.getenv("INTERVAL_MIN", "2"))  # Você pediu 2 minutos
 PORT = int(os.getenv("PORT", "8080"))
-# WEBHOOK_BASE_URL deve ser a URL pública que aponta para seu serviço Railway (sem /webhook)
-# Você forneceu um link do painel; se não for o público use a URL pública que aparece no "Live" do Railway.
-WEBHOOK_BASE_URL = os.getenv(
-    "WEBHOOK_BASE_URL",
-    "https://railway.com/project/5dddd7b1-5efb-47a2-9bc9-7731445131d6/service/8b4d56a4-8ef6-49dc-b5ca-7a150a9663bd"
-)
-# Chat id onde postar (você passou -4983279500)
-GROUP_ID = os.getenv("GROUP_ID", "-4983279500")
+WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "https://<YOUR_PUBLIC_RAILWAY_URL>")  # ajuste ao seu domínio público
 
 # Amazon Goldbox (ofertas)
 URL_AMAZON_GOLDBOX = "https://www.amazon.com.br/gp/goldbox"
 
 # Limites e politeness
 MAX_PRODUCTS_PER_ROUND = 6
-REQUEST_DELAY = 0.9  # segundos entre requisições de produto (educado)
+REQUEST_DELAY = 0.9  # segundos entre requisições de produto
 REQUEST_TIMEOUT = 12
 
-# Palavras-chave para filtrar games + eletrônicos
+# Palavras-chave para filtrar games + eletrônicos (pt + termos comuns)
 CATEGORY_KEYWORDS = [
     "game", "games", "videogame", "console", "ps5", "ps4", "xbox", "nintendo", "switch",
     "eletrônico", "eletronico", "eletrônicos", "eletronicos", "celular", "notebook",
@@ -96,7 +90,7 @@ def safe_get_text_sync(url: str, timeout: int = REQUEST_TIMEOUT) -> Optional[str
         r.raise_for_status()
         return r.text
     except Exception as e:
-        logger.debug("Erro HTTP (sync) %s: %s", url, e)
+        logger.debug("HTTP error (sync) %s: %s", url, e)
         return None
 
 
@@ -105,14 +99,19 @@ def parse_price_str(price_str: str) -> Optional[float]:
     if not price_str:
         return None
     s = price_str.strip()
+    # remove R$, espaços e pontos de milhar, troca vírgula por ponto
     s = s.replace("R$", "").replace("R", "").replace(".", "").replace(" ", "").replace(",", ".")
-    try:
-        return float(re.findall(r"\d+(\.\d+)?", s)[0])
-    except Exception:
+    # extrai número com regex
+    m = re.search(r"\d+(\.\d+)?", s)
+    if not m:
         try:
             return float(s)
         except Exception:
             return None
+    try:
+        return float(m.group(0))
+    except Exception:
+        return None
 
 
 def parse_product_page(html: str, url: str) -> Dict:
@@ -146,7 +145,7 @@ def parse_product_page(html: str, url: str) -> Dict:
     if strike:
         price_original = strike.get_text(strip=True)
     else:
-        # fallback: verificar se existe "De R$"
+        # fallback heuristics
         possible = soup.select_one("span.a-size-base.a-color-secondary")
         if possible and "De R$" in possible.get_text():
             price_original = possible.get_text(strip=True)
@@ -184,13 +183,12 @@ def fetch_promotions_blocking(limit: int = MAX_PRODUCTS_PER_ROUND) -> List[Dict]
     seen = set()
     promotions = []
 
-    # varrer anchors (em ordem encontrada)
     for a in anchors:
         href = a.get("href")
         if not href:
             continue
 
-        # normalizar URL
+        # normalizar URL sem querystring
         if href.startswith("/"):
             prod_url = "https://www.amazon.com.br" + href.split("?")[0]
         else:
@@ -257,11 +255,12 @@ def build_affiliate_url(url: str) -> str:
 
 
 # ---------------- POSTAGEM (async) ----------------
-async def post_promotions(bot: Bot):
+async def post_promotions(bot: Bot) -> int:
     # executa a raspagem em thread
     promotions = await asyncio.to_thread(fetch_promotions_blocking, MAX_PRODUCTS_PER_ROUND)
     if not promotions:
         logger.info("Nenhuma promoção encontrada nesta rodada.")
+        # enviar mensagem no grupo informando que não houve ofertas? (opt-in) - por enquanto só log
         return 0
 
     posted = 0
@@ -370,12 +369,15 @@ async def stop_scheduler(application) -> bool:
 
 # ---------------- TELEGRAM COMMANDS ----------------
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot ativo. Use /start_posting para ligar postagens automáticas.")
+    await update.message.reply_text("✅ Bot ativo. Use /start_posting para iniciar postagens automáticas.")
 
 
 async def cmd_start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await start_scheduler(context.application)
-    await update.message.reply_text(f"🤖 Postagens automáticas ativadas a cada {INTERVAL_MIN} minutos.")
+    result = await start_scheduler(context.application)
+    if result == "already_running":
+        await update.message.reply_text("⚙️ As postagens automáticas já estão ativas.")
+    else:
+        await update.message.reply_text(f"🤖 Postagens automáticas ativadas! Rodando a cada {INTERVAL_MIN} minutos.")
 
 
 async def cmd_stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -388,15 +390,13 @@ async def cmd_stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_postnow(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await post_promotions(context.application.bot)
-    await update.message.reply_text("📤 Post manual finalizado.")
+    await update.message.reply_text("📤 Post manual concluído.")
 
 
 # ---------------- AIOHTTP WEBHOOK SERVER ----------------
-# Endpoint /webhook será usado pelo Telegram para entregar updates
 async def handle_webhook(request: web.Request) -> web.Response:
     """
     Recebe payload JSON do Telegram e processa a update com a Application.
-    O objeto Application está guardado em request.app['telegram_application'] (set no main).
     """
     app: "telegram.ext.Application" = request.app["telegram_application"]
     try:
@@ -405,21 +405,16 @@ async def handle_webhook(request: web.Request) -> web.Response:
         return web.Response(status=400, text="invalid")
     try:
         update = Update.de_json(data, bot=app.bot)
-        # agendar processamento dentro do loop da Application
         await app.process_update(update)
     except Exception as e:
         logger.exception("Erro ao processar update via webhook: %s", e)
-        # não falhar o endpoint para que Telegram não considere erro persistente
     return web.Response(text="OK")
 
 
-# ---------------- START / SHUTDOWN ----------------
 async def start_webserver_and_set_webhook(application):
     """
     Inicia o servidor aiohttp e registra o webhook no Telegram.
-    Coloca a instância da Application em request.app so handler consiga usar.
     """
-    # Rota webhook (path /webhook)
     routes = web.RouteTableDef()
 
     @routes.post("/webhook")
@@ -428,14 +423,13 @@ async def start_webserver_and_set_webhook(application):
 
     web_app = web.Application()
     web_app.add_routes(routes)
-    # disponibilizar application dentro do web app (para handle_webhook)
     web_app["telegram_application"] = application
 
     runner = web.AppRunner(web_app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    logger.info("Servidor webhook iniciado no porto %s", PORT)
+    logger.info("Servidor webhook iniciado na porta %s", PORT)
 
     # configurar webhook no Telegram
     webhook_url = WEBHOOK_BASE_URL.rstrip("/") + "/webhook"
@@ -446,13 +440,16 @@ async def start_webserver_and_set_webhook(application):
         logger.exception("Falha ao configurar webhook: %s", e)
         raise
 
-    return runner  # para shutdown se desejado
+    return runner
 
 
 # ---------------- MAIN (async) ----------------
 async def async_main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN não definido nas variáveis de ambiente.")
+    if "<YOUR_PUBLIC_RAILWAY_URL>" in WEBHOOK_BASE_URL or "railway.com/project" in WEBHOOK_BASE_URL:
+        logger.warning("WEBHOOK_BASE_URL parece não ser a URL pública correta. Verifique e ajuste WEBHOOK_BASE_URL nas environment variables (use a URL pública do seu serviço, ex. https://meu-projeto.up.railway.app).")
+
     logger.info("Inicializando Application (webhook mode)...")
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -469,18 +466,16 @@ async def async_main():
 
     application.post_init = _on_startup
 
-    # inicializar bot (necessário para set_webhook)
+    # inicializar application para uso de bot.set_webhook
     await application.initialize()
-    await application.start()  # start the application (connectors etc.)
+    await application.start()
     # start webhook server and register webhook
     runner = await start_webserver_and_set_webhook(application)
 
     logger.info("Aplicação pronta. Webhook ativo e scheduler rodando.")
-    # manter rodando até sinal de término
     try:
         await asyncio.Event().wait()
     finally:
-        # shutdown ordenado
         logger.info("Shutting down: removendo webhook e parando servidor.")
         try:
             await application.bot.delete_webhook()

@@ -39,7 +39,7 @@ GROUP_ID = os.getenv("GROUP_ID", "-4983279500")  # seu grupo
 AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")  # seu afiliado
 INTERVAL_MIN = int(os.getenv("INTERVAL_MIN", "2"))  # Você pediu 2 minutos
 PORT = int(os.getenv("PORT", "8080"))
-WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "https://<YOUR_PUBLIC_RAILWAY_URL>")  # ajuste ao seu domínio público
+WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "amazon-affiliate-bot-production.up.railway.app")  # ajuste ao seu domínio público
 
 # Amazon Goldbox (ofertas)
 URL_AMAZON_GOLDBOX = "https://www.amazon.com.br/gp/goldbox"

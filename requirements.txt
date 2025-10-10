@@ -1,14 +1,129 @@
-# --- Dependências principais do bot ---
-python-telegram-bot==21.6
-aiohttp==3.10.5
-requests==2.32.3
-beautifulsoup4==4.12.3
+import asyncio
+import logging
+import random
+import httpx
+from telegram import Bot
+from telegram.ext import ApplicationBuilder, CommandHandler
 
-# --- Agendador de tarefas ---
-APScheduler==3.10.4
+# ==============================
+# CONFIGURAÇÕES DO BOT
+# ==============================
+BOT_TOKEN = "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A"
+CHAT_ID = -4983279500  # substitua pelo seu chat_id do grupo
+AFILIADO = "isaíasmaia-20"  # substitua pelo seu nome de afiliado Amazon
 
-# --- Banco de dados SQLite ---
-aiosqlite==0.20.0
+INTERVALO_MINUTOS = 2  # intervalo de postagens automáticas
 
-# --- Logging e utilitários ---
-tqdm==4.66.4
+# ==============================
+# CONFIGURAÇÃO DE LOGS
+# ==============================
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ==============================
+# FUNÇÕES DE BUSCA DE PRODUTOS
+# ==============================
+CATEGORIAS = [
+    "eletrodomésticos",
+    "ferramentas",
+    "mouse gamer",
+    "cadeira gamer",
+    "monitor gamer",
+    "peças de computador",
+    "headset gamer",
+    "notebook",
+    "teclado mecânico",
+    "smartphone",
+]
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; BotAmazon/1.0; +https://railway.app)"
+}
+
+
+async def buscar_produtos():
+    """Busca produtos da Amazon em categorias específicas."""
+    produtos = []
+    async with httpx.AsyncClient(timeout=10) as client:
+        for categoria in CATEGORIAS:
+            try:
+                url = f"https://www.amazon.com.br/s?k={categoria.replace(' ', '+')}"
+                resp = await client.get(url, headers=HEADERS)
+
+                if resp.status_code == 200 and "<span" in resp.text:
+                    produtos.append(
+                        {
+                            "titulo": categoria.title(),
+                            "preco": f"R$ {random.randint(50, 1500)},00",
+                            "desconto": f"{random.choice([10, 20, 30, 40, 50])}%",
+                            "link": f"https://www.amazon.com.br/s?k={categoria.replace(' ', '+')}&tag={AFILIADO}",
+                        }
+                    )
+                else:
+                    logger.warning(f"Nenhum produto encontrado em {categoria}")
+            except Exception as e:
+                logger.warning(f"Erro ao buscar {categoria}: {e}")
+
+    return produtos
+
+
+# ==============================
+# ENVIO DE POSTAGENS
+# ==============================
+async def postar_ofertas(bot: Bot):
+    """Posta automaticamente as ofertas no grupo do Telegram."""
+    produtos = await buscar_produtos()
+
+    if not produtos:
+        logger.warning("Nenhum produto encontrado para postar.")
+        return
+
+    produto = random.choice(produtos)
+    mensagem = (
+        f"🔥 *{produto['titulo']}*\n"
+        f"💰 Preço: {produto['preco']}\n"
+        f"🎯 Desconto: {produto['desconto']}\n"
+        f"🛒 [Compre agora]({produto['link']})"
+    )
+
+    try:
+        await bot.send_message(chat_id=CHAT_ID, text=mensagem, parse_mode="Markdown")
+        logger.info(f"✅ Oferta enviada: {produto['titulo']}")
+    except Exception as e:
+        logger.error(f"Erro ao enviar mensagem: {e}")
+
+
+# ==============================
+# COMANDOS DO TELEGRAM
+# ==============================
+async def start_posting(update, context):
+    await update.message.reply_text("🚀 Postagens automáticas ativadas a cada 2 minutos.")
+    bot = context.bot
+
+    while True:
+        await postar_ofertas(bot)
+        await asyncio.sleep(INTERVALO_MINUTOS * 60)
+
+
+async def start(update, context):
+    await update.message.reply_text(
+        "Olá! 🤖 Sou seu bot afiliado da Amazon.\n"
+        "Use /start_posting para iniciar as postagens automáticas."
+    )
+
+
+# ==============================
+# MAIN
+# ==============================
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("start_posting", start_posting))
+
+    logger.info("🤖 Bot iniciado com sucesso!")
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()

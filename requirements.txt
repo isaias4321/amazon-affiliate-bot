@@ -1,3 +1,5 @@
 python-telegram-bot==21.4
+aiohttp==3.10.5
+beautifulsoup4==4.12.3
 httpx==0.27.0
-asyncio
+requests==2.32.3

@@ -10,7 +10,7 @@ from telegram.ext import Application, CommandHandler
 # ==========================
 # CONFIGURAÇÕES DO BOT
 # ==========================
-BOT_TOKEN = "SEU_TOKEN_AQUI"
+BOT_TOKEN = "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A"
 CHAT_ID = "-4983279500"  # ID do seu grupo
 AFILIADO = "isaias06f-20"
 INTERVALO_MINUTOS = 2  # tempo entre postagens automáticas

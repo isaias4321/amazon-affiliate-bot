@@ -10,7 +10,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 # -----------------------------
 BOT_TOKEN = "SEU_TOKEN_AQUI"  # substitua pelo seu token
 GROUP_ID = "-1001234567890"   # substitua após confirmar com o /start_posting
-AFILIADO = "isaíasmaia-20"
+AFILIADO = "isaias06f-20"
 
 # -----------------------------
 # LOGGING
@@ -52,7 +52,6 @@ async def buscar_promocoes():
                 async with session.get(url) as response:
                     if response.status == 200:
                         html = await response.text()
-                        # Aqui simplificamos apenas para simular o resultado
                         produtos.append({
                             "nome": f"🔥 Oferta especial em {categoria.title()}",
                             "link": f"https://www.amazon.com.br/s?k={categoria.replace(' ', '+')}&tag={AFILIADO}"
@@ -89,25 +88,25 @@ async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     logger.info(f"Comando recebido em chat {chat_id}")
 
-    # Mostra ID do grupo pra confirmar
-    await update.message.reply_text(f"✅ Bot ativado neste chat!\n📢 ID do grupo: `{chat_id}`", parse_mode="Markdown")
+    await update.message.reply_text(
+        f"✅ Bot ativado neste chat!\n📢 ID do grupo: `{chat_id}`",
+        parse_mode="Markdown"
+    )
 
-    # Atualiza o GROUP_ID (caso o usuário não tenha configurado manualmente)
     global GROUP_ID
     GROUP_ID = str(chat_id)
 
-    # Inicia o loop de postagens automáticas a cada 2 minutos
     context.job_queue.run_repeating(postar_ofertas_automaticamente, interval=120, first=5)
     await update.message.reply_text("🚀 Postagens automáticas ativadas a cada 2 minutos!")
 
 # -----------------------------
-# MAIN
+# MAIN (COMPATÍVEL COM RAILWAY)
 # -----------------------------
-async def main():
+def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start_posting", start_posting))
     logger.info("Bot iniciado com sucesso.")
-    await app.run_polling()
+    app.run_polling(stop_signals=None)  # não fecha o loop no Railway
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

@@ -8,7 +8,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 # -----------------------------
 # CONFIGURAÇÕES DO BOT
 # -----------------------------
-BOT_TOKEN = "SEU_TOKEN_AQUI"  # substitua pelo seu token
+BOT_TOKEN = "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A"  # substitua pelo seu token
 GROUP_ID = "-1001234567890"   # substitua após confirmar com o /start_posting
 AFILIADO = "isaias06f-20"
 

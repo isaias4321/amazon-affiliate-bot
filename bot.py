@@ -4,6 +4,7 @@ import time
 import logging
 import sqlite3
 import aiohttp
+import psutil
 from typing import List, Dict
 from bs4 import BeautifulSoup
 from telegram import (
@@ -18,41 +19,42 @@ from telegram.ext import (
     ContextTypes,
 )
 
-# ---------------- Configurações principais ----------------
+# ---------------- CONFIGURAÇÕES ----------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = os.getenv("GROUP_ID", "-4983279500")
 AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
 
-INTERVAL_MIN = 2  # Intervalo de postagens automáticas (em minutos)
+INTERVAL_MIN = 2  # minutos entre postagens automáticas
 MAX_PRODUCTS_PER_ROUND = 3
 REQUEST_DELAY = 2
-URL_AMAZON_GOLDBOX = "https://www.amazon.com.br/gp/goldbox"  # ✅ link correto
+URL_AMAZON_GOLDBOX = "https://www.amazon.com.br/gp/goldbox"
 
-# ---------------- Configurações de categorias ----------------
 CATEGORY_KEYWORDS = [
+    # Produtos gamers
     "gamer", "cadeira gamer", "mouse gamer", "teclado gamer", "monitor gamer",
     "headset gamer", "console", "playstation", "xbox", "nintendo", "rgb",
-    "pc gamer", "gabinete", "placa de vídeo", "gpu", "ssd", "memória ram", "cooler",
-    "processador", "fonte", "placa mãe",
+    "pc gamer", "gabinete", "placa de vídeo", "gpu", "ssd", "memória ram",
+    "cooler", "processador", "fonte", "placa mãe",
 
-    "eletrônico", "eletronico", "smartphone", "celular", "notebook", "tablet",
-    "televisão", "tv", "caixa de som", "fone", "carregador", "usb", "bluetooth",
+    # Eletrônicos
+    "eletrônico", "smartphone", "celular", "notebook", "tablet", "televisão",
+    "tv", "caixa de som", "fone", "carregador", "usb", "bluetooth",
 
+    # Eletrodomésticos
     "geladeira", "micro-ondas", "microondas", "fogão", "cafeteira", "batedeira",
     "liquidificador", "aspirador", "ventilador", "ar condicionado", "lava-louças",
     "lavadora", "secadora", "panela elétrica", "airfryer", "fritadeira elétrica",
 
+    # Ferramentas
     "ferramenta", "furadeira", "parafusadeira", "chave de fenda", "compressor",
     "serra", "multímetro", "trena", "caixa de ferramentas", "maçarico",
-
-    "aparelho", "equipamento", "dispositivo"
 ]
 
-# ---------------- Logs ----------------
+# ---------------- LOGS ----------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# ---------------- Banco de dados ----------------
+# ---------------- BANCO DE DADOS ----------------
 DB_PATH = "offers.db"
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 conn.execute("""
@@ -69,20 +71,11 @@ CREATE TABLE IF NOT EXISTS offers (
 conn.commit()
 db_lock = asyncio.Lock()
 
-# ---------------- Funções auxiliares ----------------
+# ---------------- FUNÇÕES AUXILIARES ----------------
 async def safe_get_text(url: str) -> str:
-    """Baixa HTML com cabeçalhos falsos para evitar bloqueio."""
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/127.0.0.0 Safari/537.36"
-        ),
-        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
-    }
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as resp:
+            async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}) as resp:
                 if resp.status != 200:
                     logger.warning(f"Erro HTTP {resp.status} ao acessar {url}")
                     return ""
@@ -144,19 +137,20 @@ def fetch_promotions_blocking(limit: int = MAX_PRODUCTS_PER_ROUND) -> List[Dict]
             continue
 
         pdata = parse_product_page(page_html, prod_url)
-        title_lower = pdata.get("title", "").lower()
 
+        title_lower = pdata.get("title", "").lower()
         if any(kw in title_lower for kw in CATEGORY_KEYWORDS):
             p1 = parse_price(pdata.get("price_original", ""))
             p2 = parse_price(pdata.get("price_deal", ""))
             if p1 > 0 and p2 > 0 and p2 < p1:
-                pdata["discount"] = round((1 - (p2 / p1)) * 100)
+                discount_pct = round((1 - (p2 / p1)) * 100)
+                pdata["discount"] = discount_pct
                 promotions.append(pdata)
 
         if len(promotions) >= limit:
             break
 
-    logger.info("Encontradas %d promoções válidas.", len(promotions))
+    logger.info("Encontradas %d promoções com desconto válido.", len(promotions))
     return promotions
 
 def build_affiliate_url(url: str) -> str:
@@ -165,11 +159,11 @@ def build_affiliate_url(url: str) -> str:
         return f"{url}{sep}tag={AFFILIATE_TAG}"
     return url
 
-# ---------------- Postagem automática ----------------
+# ---------------- POSTAGENS ----------------
 async def post_promotions(application_bot):
     promotions = await asyncio.to_thread(fetch_promotions_blocking, MAX_PRODUCTS_PER_ROUND)
     if not promotions:
-        logger.info("Nenhuma promoção encontrada nesta rodada.")
+        logger.info("Nenhuma promoção válida encontrada nesta rodada.")
         return
 
     for item in promotions:
@@ -219,12 +213,15 @@ async def post_promotions(application_bot):
         except Exception as e:
             logger.error(f"Erro ao enviar mensagem: {e}")
 
-# ---------------- Scheduler ----------------
+# ---------------- SCHEDULER ----------------
 async def scheduler_loop(application):
-    logger.info("⏱️ Loop de postagens iniciado (a cada %d min)...", INTERVAL_MIN)
+    logger.info("⏱️ Iniciando postagens automáticas a cada %d minutos...", INTERVAL_MIN)
     try:
         while True:
-            await post_promotions(application.bot)
+            try:
+                await post_promotions(application.bot)
+            except Exception as e:
+                logger.exception("Erro na rodada de postagens: %s", e)
             await asyncio.sleep(INTERVAL_MIN * 60)
     except asyncio.CancelledError:
         logger.info("Scheduler encerrado.")
@@ -251,13 +248,22 @@ async def stop_scheduler(application):
     application.bot_data.pop(_scheduler_task_name, None)
     return True
 
-# ---------------- Comandos ----------------
+# ---------------- VERIFICAÇÃO DE INSTÂNCIA ÚNICA ----------------
+def is_already_running(script_name="bot.py"):
+    count = 0
+    for proc in psutil.process_iter(attrs=["cmdline"]):
+        cmd = proc.info["cmdline"]
+        if cmd and script_name in " ".join(cmd):
+            count += 1
+    return count > 1
+
+# ---------------- COMANDOS TELEGRAM ----------------
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot ativo! Use /start_posting para iniciar postagens automáticas.")
+    await update.message.reply_text("✅ Bot inicializado! Use /start_posting para começar as postagens automáticas.")
 
 async def cmd_start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start_scheduler(context.application)
-    await update.message.reply_text(f"🤖 Postagens automáticas a cada {INTERVAL_MIN} minutos ativadas!")
+    await update.message.reply_text(f"🤖 Postagens automáticas ativadas a cada {INTERVAL_MIN} minutos.")
 
 async def cmd_stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stopped = await stop_scheduler(context.application)
@@ -266,18 +272,24 @@ async def cmd_stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_postnow(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await post_promotions(context.application.bot)
-    await update.message.reply_text("📤 Postagem manual concluída!")
+    await update.message.reply_text("📤 Postagem manual realizada!")
 
-# ---------------- Execução principal ----------------
+# ---------------- MAIN ----------------
 def main():
     if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN não configurado.")
+        raise RuntimeError("BOT_TOKEN não configurado nas variáveis de ambiente.")
+
+    if is_already_running():
+        logger.warning("⚠️ O bot já está rodando em outro processo. Abortando nova execução.")
+        return
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("start_posting", cmd_start_posting))
     app.add_handler(CommandHandler("stop_posting", cmd_stop_posting))
     app.add_handler(CommandHandler("postnow", cmd_postnow))
-    logger.info("🚀 Bot iniciado com sucesso!")
+
+    logger.info("🚀 Bot iniciado e rodando...")
     app.run_polling(stop_signals=None)
 
 if __name__ == "__main__":

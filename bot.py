@@ -24,30 +24,28 @@ GROUP_ID = os.getenv("GROUP_ID", "-4983279500")
 AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
 
 INTERVAL_MIN = 2  # Intervalo de postagens automáticas (em minutos)
-MAX_PRODUCTS_PER_ROUND = 2  # Menos produtos por rodada, para evitar bloqueio
-REQUEST_DELAY = 5  # Tempo entre requisições internas (em segundos)
-URL_AMAZON_GOLDBOX = "https://www.amazon.com.br/gp/goldbox"
+MAX_PRODUCTS_PER_ROUND = 3
+REQUEST_DELAY = 2
+URL_AMAZON_GOLDBOX = "https://www.amazon.com.br/gp/goldbox"  # ✅ link correto
 
-# ---------------- Categorias específicas ----------------
+# ---------------- Configurações de categorias ----------------
 CATEGORY_KEYWORDS = [
-    # Produtos gamers
     "gamer", "cadeira gamer", "mouse gamer", "teclado gamer", "monitor gamer",
     "headset gamer", "console", "playstation", "xbox", "nintendo", "rgb",
     "pc gamer", "gabinete", "placa de vídeo", "gpu", "ssd", "memória ram", "cooler",
     "processador", "fonte", "placa mãe",
 
-    # Eletrônicos
-    "eletrônico", "smartphone", "celular", "notebook", "tablet", "televisão",
-    "tv", "caixa de som", "fone", "carregador", "usb", "bluetooth",
+    "eletrônico", "eletronico", "smartphone", "celular", "notebook", "tablet",
+    "televisão", "tv", "caixa de som", "fone", "carregador", "usb", "bluetooth",
 
-    # Eletrodomésticos
-    "geladeira", "micro-ondas", "fogão", "cafeteira", "batedeira", "liquidificador",
-    "aspirador", "ventilador", "ar condicionado", "lava-louças", "lavadora",
-    "secadora", "panela elétrica", "airfryer", "fritadeira elétrica",
+    "geladeira", "micro-ondas", "microondas", "fogão", "cafeteira", "batedeira",
+    "liquidificador", "aspirador", "ventilador", "ar condicionado", "lava-louças",
+    "lavadora", "secadora", "panela elétrica", "airfryer", "fritadeira elétrica",
 
-    # Ferramentas
     "ferramenta", "furadeira", "parafusadeira", "chave de fenda", "compressor",
-    "serra", "multímetro", "trena", "caixa de ferramentas", "maçarico"
+    "serra", "multímetro", "trena", "caixa de ferramentas", "maçarico",
+
+    "aparelho", "equipamento", "dispositivo"
 ]
 
 # ---------------- Logs ----------------
@@ -73,22 +71,18 @@ db_lock = asyncio.Lock()
 
 # ---------------- Funções auxiliares ----------------
 async def safe_get_text(url: str) -> str:
-    """Faz requisição com cabeçalhos simulando navegador para evitar bloqueio."""
+    """Baixa HTML com cabeçalhos falsos para evitar bloqueio."""
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/122.0.0.0 Safari/537.36"
+            "Chrome/127.0.0.0 Safari/537.36"
         ),
-        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Referer": "https://www.amazon.com.br/",
-        "Connection": "keep-alive",
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
     }
-
     try:
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(url, timeout=30) as resp:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as resp:
                 if resp.status != 200:
                     logger.warning(f"Erro HTTP {resp.status} ao acessar {url}")
                     return ""
@@ -110,20 +104,19 @@ def parse_product_page(html: str, url: str) -> Dict:
     soup = BeautifulSoup(html, "html.parser")
     title = soup.find("span", id="productTitle")
     image_tag = soup.find("img", id="landingImage")
-
     price_deal = soup.find("span", class_="a-price-whole")
     price_original = soup.find("span", class_="a-text-price")
 
-    pdata = {
+    return {
         "title": title.text.strip() if title else "",
         "url": url,
         "image": image_tag["src"] if image_tag else "",
         "price_deal": price_deal.text.strip() if price_deal else "",
         "price_original": price_original.text.strip() if price_original else "",
     }
-    return pdata
 
 def fetch_promotions_blocking(limit: int = MAX_PRODUCTS_PER_ROUND) -> List[Dict]:
+    import re
     html = asyncio.run(safe_get_text(URL_AMAZON_GOLDBOX))
     if not html:
         return []
@@ -157,14 +150,13 @@ def fetch_promotions_blocking(limit: int = MAX_PRODUCTS_PER_ROUND) -> List[Dict]
             p1 = parse_price(pdata.get("price_original", ""))
             p2 = parse_price(pdata.get("price_deal", ""))
             if p1 > 0 and p2 > 0 and p2 < p1:
-                discount_pct = round((1 - (p2 / p1)) * 100)
-                pdata["discount"] = discount_pct
+                pdata["discount"] = round((1 - (p2 / p1)) * 100)
                 promotions.append(pdata)
 
         if len(promotions) >= limit:
             break
 
-    logger.info("Encontradas %d promoções com desconto válido.", len(promotions))
+    logger.info("Encontradas %d promoções válidas.", len(promotions))
     return promotions
 
 def build_affiliate_url(url: str) -> str:
@@ -177,7 +169,7 @@ def build_affiliate_url(url: str) -> str:
 async def post_promotions(application_bot):
     promotions = await asyncio.to_thread(fetch_promotions_blocking, MAX_PRODUCTS_PER_ROUND)
     if not promotions:
-        logger.info("Nenhuma promoção válida encontrada nesta rodada.")
+        logger.info("Nenhuma promoção encontrada nesta rodada.")
         return
 
     for item in promotions:
@@ -229,13 +221,10 @@ async def post_promotions(application_bot):
 
 # ---------------- Scheduler ----------------
 async def scheduler_loop(application):
-    logger.info("⏱️ Iniciando loop de postagens automáticas (a cada %d min)...", INTERVAL_MIN)
+    logger.info("⏱️ Loop de postagens iniciado (a cada %d min)...", INTERVAL_MIN)
     try:
         while True:
-            try:
-                await post_promotions(application.bot)
-            except Exception as e:
-                logger.exception("Erro na rodada de postagens: %s", e)
+            await post_promotions(application.bot)
             await asyncio.sleep(INTERVAL_MIN * 60)
     except asyncio.CancelledError:
         logger.info("Scheduler encerrado.")
@@ -262,13 +251,13 @@ async def stop_scheduler(application):
     application.bot_data.pop(_scheduler_task_name, None)
     return True
 
-# ---------------- Comandos do Telegram ----------------
+# ---------------- Comandos ----------------
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot inicializado! Use /start_posting para começar as postagens automáticas.")
+    await update.message.reply_text("✅ Bot ativo! Use /start_posting para iniciar postagens automáticas.")
 
 async def cmd_start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start_scheduler(context.application)
-    await update.message.reply_text(f"🤖 Postagens automáticas ativadas a cada {INTERVAL_MIN} minutos.")
+    await update.message.reply_text(f"🤖 Postagens automáticas a cada {INTERVAL_MIN} minutos ativadas!")
 
 async def cmd_stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stopped = await stop_scheduler(context.application)
@@ -277,20 +266,18 @@ async def cmd_stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_postnow(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await post_promotions(context.application.bot)
-    await update.message.reply_text("📤 Postagem manual realizada!")
+    await update.message.reply_text("📤 Postagem manual concluída!")
 
 # ---------------- Execução principal ----------------
 def main():
     if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN não configurado nas variáveis de ambiente.")
-
+        raise RuntimeError("BOT_TOKEN não configurado.")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("start_posting", cmd_start_posting))
     app.add_handler(CommandHandler("stop_posting", cmd_stop_posting))
     app.add_handler(CommandHandler("postnow", cmd_postnow))
-
-    logger.info("🚀 Bot iniciado e rodando...")
+    logger.info("🚀 Bot iniciado com sucesso!")
     app.run_polling(stop_signals=None)
 
 if __name__ == "__main__":

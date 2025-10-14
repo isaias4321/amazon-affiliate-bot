@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # Carrega variáveis de ambiente
 load_dotenv()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN") or "SEU_TOKEN_AQUI"
+BOT_TOKEN = os.getenv("BOT_TOKEN") or "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A"
 GROUP_ID = int(os.getenv("GROUP_ID") or -4983279500)
 API_URL = os.getenv("API_URL") or "https://amazon-affiliate-bot-production.up.railway.app"
 INTERVAL_MIN = 1  # minutos

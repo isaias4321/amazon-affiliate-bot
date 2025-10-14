@@ -1,160 +1,150 @@
 import asyncio
 import logging
+import random
+import re
+from bs4 import BeautifulSoup
 import aiohttp
-import os
-import nest_asyncio
 from telegram import Bot
-from telegram.error import Forbidden, InvalidToken
-from datetime import datetime
-from dotenv import load_dotenv
+from telegram.ext import Application, CommandHandler
 
-# Corrige event loop (necessário em ambientes como Jupyter, mantido por precaução)
-nest_asyncio.apply()
+# ==========================
+# CONFIGURAÇÕES DO BOT
+# ==========================
+BOT_TOKEN = "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A"
+CHAT_ID = "-4983279500"  # ID do seu grupo
+AFILIADO = "isaias06f-20"
+INTERVALO_MINUTOS = 2  # tempo entre postagens automáticas
 
-# Configuração de logs
+# ==========================
+# LOG
+# ==========================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Carrega variáveis de ambiente
-load_dotenv()
+# ==========================
+# URLs de CATEGORIAS
+# ==========================
+urls = [
+    "https://www.amazon.com.br/gp/browse.html?node=16243862011",  # Eletrônicos
+    "https://www.amazon.com.br/gp/browse.html?node=16364755011",  # Games
+    "https://www.amazon.com.br/gp/browse.html?node=16243890011"   # Computadores
+]
 
-# --- VARIÁVEIS DE AMBIENTE (REMOVIDOS VALORES HARDCODED PARA FORÇAR USO DO RAILWAY) ---
-# Se estas variáveis não estiverem definidas no Railway, o script irá falhar, o que é o comportamento desejado.
-try:
-    BOT_TOKEN = os.getenv("BOT_TOKEN")
-    GROUP_ID = int(os.getenv("GROUP_ID"))
-    API_URL = os.getenv("API_URL")
-    INTERVAL_MIN = int(os.getenv("INTERVAL_MIN", 1)) # Permite configurar o intervalo em minutos
-
-    if not all([BOT_TOKEN, GROUP_ID, API_URL]):
-         raise ValueError("As variáveis de ambiente BOT_TOKEN, GROUP_ID e API_URL são obrigatórias.")
-         
-except (TypeError, ValueError) as e:
-    logger.error(f"Erro de configuração: {e}")
-    # Encerra o script se as variáveis cruciais não estiverem definidas
-    exit(1)
-
-
-# ======================
-# BUSCAR PRODUTOS VIA SUA API
-# ======================
-async def buscar_produtos():
-    """Busca produtos na API local (FastAPI) rodando no Railway."""
-    categorias = ["notebook", "monitor", "mouse", "cadeira gamer", "teclado", "ferramenta", "geladeira"]
+# ==========================
+# BUSCAR PRODUTOS COM DESCONTO
+# ==========================
+async def buscar_produtos_com_desconto():
     produtos = []
 
-    # Configurando um timeout de 15 segundos para a requisição
-    timeout = aiohttp.ClientTimeout(total=15)
-
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        for categoria in categorias:
+    async with aiohttp.ClientSession() as session:
+        for url in urls:
             try:
-                # Usa a variável API_URL injetada do Railway
-                url = f"{API_URL}/api/amazon?query={categoria}"
-                async with session.get(url) as resp:
-                    
-                    if resp.status == 404:
-                         # Isso geralmente significa que a API_URL está correta, mas a rota não existe
-                         logger.error(f"Erro 404: Rota não encontrada na API. URL: {url}")
-                         continue
-
-                    if resp.status != 200:
-                        logger.warning(f"Erro HTTP {resp.status} ao acessar {categoria} (URL: {url})")
+                async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}) as response:
+                    if response.status != 200:
+                        logger.warning(f"Erro HTTP {response.status} ao acessar {url}")
                         continue
-                        
-                    data = await resp.json()
-                    if "items" in data:
-                        produtos.extend(data["items"])
-                        
-            except aiohttp.client_exceptions.ClientConnectorError:
-                logger.error(f"Erro de conexão: API_URL '{API_URL}' não está acessível ou está incorreta.")
-                break # Para o loop de categorias se a API não estiver acessível
-            except asyncio.TimeoutError:
-                logger.error(f"Timeout (15s) ao buscar produtos de {categoria}.")
+                    html = await response.text()
+                    soup = BeautifulSoup(html, "html.parser")
+
+                    for produto in soup.select(".s-result-item"):
+                        titulo = produto.select_one("h2 a span")
+                        preco = produto.select_one(".a-price-whole")
+                        link = produto.select_one("h2 a")
+                        imagem = produto.select_one("img")
+                        preco_antigo = produto.select_one(".a-text-price span")
+
+                        if not (titulo and preco and link):
+                            continue
+
+                        titulo = titulo.text.strip()
+                        preco = preco.text.strip()
+                        link = link["href"]
+                        if not link.startswith("http"):
+                            link = f"https://www.amazon.com.br{link}"
+                        imagem_url = imagem["src"] if imagem else None
+
+                        # Cálculo do desconto (se houver preço antigo)
+                        desconto = None
+                        if preco_antigo:
+                            try:
+                                preco_antigo_val = float(re.sub(r"[^\d]", "", preco_antigo.text)) / 100
+                                preco_atual_val = float(re.sub(r"[^\d]", "", preco)) / 100
+                                if preco_antigo_val > preco_atual_val:
+                                    desconto = int(100 - (preco_atual_val / preco_antigo_val * 100))
+                            except:
+                                pass
+
+                        # Só adiciona se tiver desconto
+                        if desconto and desconto >= 5:
+                            produtos.append({
+                                "titulo": titulo,
+                                "preco": preco,
+                                "desconto": desconto,
+                                "link": f"{link}?tag={AFILIADO}",
+                                "imagem": imagem_url
+                            })
             except Exception as e:
-                logger.error(f"Erro geral ao buscar {categoria}: {e}")
-    
+                logger.warning(f"Erro ao buscar em {url}: {e}")
+
     return produtos
 
-# ======================
-# ENVIAR OFERTAS PARA O GRUPO
-# ======================
-async def postar_ofertas(bot):
-    """Busca e posta as 3 primeiras ofertas no grupo do Telegram."""
-    produtos = await buscar_produtos()
+# ==========================
+# POSTAR NO TELEGRAM
+# ==========================
+async def postar_produto(bot: Bot, produto: dict):
+    mensagem = (
+        f"🔥 <b>{produto['titulo']}</b>\n"
+        f"💰 Preço: R$ {produto['preco']}  (-{produto['desconto']}%)\n\n"
+        f"🛒 <a href='{produto['link']}'>Ver na Amazon</a>"
+    )
 
-    if not produtos:
-        logger.warning("Nenhum produto encontrado. A API pode estar fora do ar ou sem dados.")
-        return
-
-    # Limita a 3 produtos por ciclo
-    for produto in produtos[:3]:
-        try:
-            nome = produto.get("title", "Produto sem nome")
-            preco = produto.get("price", "Preço indisponível")
-            imagem = produto.get("image", None)
-            link = produto.get("link", "https://amazon.com.br")
-
-            # Tratamento para garantir que a formatação Markdown está correta
-            nome = nome.replace('*', '').replace('_', '')
-            
-            legenda = f"🔥 *{nome}*\n💰 {preco}\n🔗 [Ver na Amazon]({link})"
-            
-            if imagem:
-                await bot.send_photo(
-                    chat_id=GROUP_ID,
-                    photo=imagem,
-                    caption=legenda,
-                    parse_mode="Markdown"
-                )
-            else:
-                await bot.send_message(
-                    chat_id=GROUP_ID,
-                    text=legenda,
-                    parse_mode="Markdown"
-                )
-
-            await asyncio.sleep(5) # Espera 5 segundos entre cada postagem
-
-        except Forbidden:
-            logger.error("Bot sem permissão (Forbidden). Certifique-se de que o BOT_TOKEN está correto e o bot é ADMINISTRADOR do grupo.")
-            return
-        except Exception as e:
-            logger.error(f"Erro ao postar produto: {e}")
-
-# ======================
-# LOOP PRINCIPAL
-# ======================
-async def main():
-    """Função principal que inicia o bot e o loop de postagem."""
-    bot = Bot(BOT_TOKEN)
-    
-    # 1. Tenta enviar uma mensagem inicial para testar o token e a permissão
     try:
-        await bot.send_message(chat_id=GROUP_ID, text="🤖 Bot iniciado com sucesso! Buscando ofertas...")
-    except InvalidToken:
-        logger.error("ERRO CRÍTICO: BOT_TOKEN inválido. O processo será encerrado.")
-        return
-    except Forbidden:
-        logger.error("ERRO CRÍTICO: Bot não é administrador no grupo ou GROUP_ID está incorreto. O processo será encerrado.")
-        return
+        if produto["imagem"]:
+            await bot.send_photo(
+                chat_id=CHAT_ID,
+                photo=produto["imagem"],
+                caption=mensagem,
+                parse_mode="HTML",
+            )
+        else:
+            await bot.send_message(
+                chat_id=CHAT_ID,
+                text=mensagem,
+                parse_mode="HTML",
+            )
     except Exception as e:
-         logger.error(f"ERRO CRÍTICO na inicialização do bot: {e}. O processo será encerrado.")
-         return
+        logger.error(f"Erro ao postar produto: {e}")
 
-    logger.info(f"Bot conectado ao Telegram e rodando a cada {INTERVAL_MIN} minutos.")
-    
-    # 2. Inicia o loop de postagem
+# ==========================
+# LOOP AUTOMÁTICO
+# ==========================
+async def loop_postagens(bot: Bot):
+    logger.info("Loop de postagens iniciado.")
     while True:
-        await postar_ofertas(bot)
-        logger.info(f"Ciclo de postagem finalizado. Próximo ciclo em {INTERVAL_MIN} minutos.")
-        await asyncio.sleep(INTERVAL_MIN * 60)
+        produtos = await buscar_produtos_com_desconto()
+        if not produtos:
+            logger.info("Nenhum produto com desconto encontrado. Tentando novamente em breve.")
+        else:
+            produto = random.choice(produtos)
+            await postar_produto(bot, produto)
+            logger.info(f"Produto postado: {produto['titulo']}")
+        await asyncio.sleep(INTERVALO_MINUTOS * 60)
+
+# ==========================
+# COMANDO /start_posting
+# ==========================
+async def start_posting(update, context):
+    await update.message.reply_text("🚀 Postagens automáticas ativadas a cada 2 minutos!")
+    bot = context.bot
+    asyncio.create_task(loop_postagens(bot))
+
+# ==========================
+# MAIN
+# ==========================
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start_posting", start_posting))
+    app.run_polling()
 
 if __name__ == "__main__":
-    # Tratamento de erro final para garantir que o motivo do crash seja logado
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Processo interrompido pelo usuário.")
-    except Exception as e:
-        logger.error(f"Falha fatal no loop principal: {e}")
+    main()

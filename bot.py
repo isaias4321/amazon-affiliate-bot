@@ -1,140 +1,145 @@
+import os
 import asyncio
-import logging
 import aiohttp
-import nest_asyncio
-from telegram import Bot, InputMediaPhoto
-from telegram.ext import ApplicationBuilder, CommandHandler
 import random
+import logging
 from bs4 import BeautifulSoup
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
+import nest_asyncio
 
-# --------------------------------------------------------
-# CONFIGURAÇÕES PRINCIPAIS
-# --------------------------------------------------------
+nest_asyncio.apply()
+
+# ---------------- CONFIGURAÇÕES ----------------
 BOT_TOKEN = "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A"
-CHAT_ID = -4983279500  # grupo onde o bot vai postar
-AFILIADO = "isaias06f-20"
+GROUP_ID = -4983279500
+AFFILIATE_TAG = "isaias06f-20"
+INTERVAL_MIN = 1  # intervalo em minutos
+MAX_PRODUCTS = 3  # quantos produtos por rodada
 
-# Intervalo de 1 minuto
-INTERVALO = 60
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+}
 
-# Palavras-chave que o bot deve procurar
-CATEGORIAS = [
-    "cadeira gamer", "mouse gamer", "monitor", "headset", "gabinete",
-    "notebook", "ferramenta", "teclado mecânico", "ssd", "hd externo",
-    "smartphone", "fone bluetooth", "tv", "roteador", "impressora"
+CATEGORIES = [
+    "notebook", "monitor gamer", "mouse gamer", "teclado gamer", "cadeira gamer",
+    "headset gamer", "console", "xbox", "playstation", "ssd", "placa de vídeo",
+    "fonte", "processador", "pc gamer", "fone bluetooth", "smartphone", "tablet"
 ]
 
-# --------------------------------------------------------
-# LOGGING
-# --------------------------------------------------------
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# --------------------------------------------------------
-# FUNÇÃO PARA BUSCAR PRODUTOS DA AMAZON
-# --------------------------------------------------------
-async def buscar_produtos():
-    produtos = []
-    url_base = "https://www.amazon.com.br/s?k="
 
+# ---------------- FUNÇÕES ----------------
+async def get_html(session, url, retries=3):
+    for i in range(retries):
+        try:
+            async with session.get(url, headers=HEADERS, timeout=15) as resp:
+                if resp.status == 200:
+                    return await resp.text()
+                logger.warning(f"Erro HTTP {resp.status} ao acessar {url}")
+        except Exception as e:
+            logger.warning(f"Tentativa {i+1} falhou: {e}")
+        await asyncio.sleep(3 + random.random() * 2)
+    return ""
+
+
+def extract_price(text):
+    import re
+    try:
+        text = text.replace(".", "").replace(",", ".")
+        return float(re.search(r"(\d+(\.\d+)?)", text).group(1))
+    except:
+        return 0.0
+
+
+async def fetch_products():
     async with aiohttp.ClientSession() as session:
-        for termo in random.sample(CATEGORIAS, 5):  # busca 5 termos diferentes
-            url = f"{url_base}{termo.replace(' ', '+')}"
-            try:
-                async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}) as resp:
-                    if resp.status != 200:
-                        logger.warning(f"Erro HTTP {resp.status} ao acessar {url}")
-                        continue
-                    html = await resp.text()
-                    soup = BeautifulSoup(html, "html.parser")
-
-                    for item in soup.select(".s-result-item"):
-                        titulo = item.select_one("h2 a span")
-                        preco = item.select_one(".a-price-whole")
-                        imagem = item.select_one("img.s-image")
-                        link = item.select_one("h2 a")
-
-                        if not (titulo and preco and link and imagem):
-                            continue
-
-                        titulo = titulo.text.strip()
-                        preco = preco.text.strip()
-                        imagem = imagem["src"]
-                        link = "https://www.amazon.com.br" + link["href"].split("?")[0]
-
-                        # Evita links de anúncios não afiliados
-                        if "/gp/" not in link:
-                            link += f"?tag={AFILIADO}"
-
-                        # Exemplo de desconto simulado (não é exato, pois Amazon esconde essa info)
-                        desconto = random.choice([10, 15, 20, 25, 30, 35])
-                        produtos.append({
-                            "titulo": titulo,
-                            "preco": preco,
-                            "desconto": desconto,
-                            "imagem": imagem,
-                            "link": link
-                        })
-
-            except Exception as e:
-                logger.warning(f"Erro ao buscar {termo}: {e}")
+        results = []
+        for keyword in random.sample(CATEGORIES, k=min(5, len(CATEGORIES))):
+            url = f"https://www.amazon.com.br/s?k={keyword.replace(' ', '+')}"
+            html = await get_html(session, url)
+            if not html:
                 continue
 
-    return produtos
+            soup = BeautifulSoup(html, "html.parser")
+            items = soup.select("div.s-main-slot div[data-asin][data-component-type='s-search-result']")
+            for item in items:
+                title_tag = item.select_one("h2 a span")
+                link_tag = item.select_one("h2 a")
+                price_tag = item.select_one("span.a-price span.a-offscreen")
+                old_price_tag = item.select_one("span.a-text-price span.a-offscreen")
+                img_tag = item.select_one("img.s-image")
 
-# --------------------------------------------------------
-# FUNÇÃO PARA POSTAR AUTOMATICAMENTE
-# --------------------------------------------------------
-async def postar_ofertas_automaticamente(context):
-    bot = context.bot
-    produtos = await buscar_produtos()
+                if not (title_tag and link_tag and price_tag and img_tag):
+                    continue
 
-    if not produtos:
+                title = title_tag.text.strip()
+                link = "https://www.amazon.com.br" + link_tag["href"].split("?")[0]
+                image = img_tag["src"]
+                price_new = extract_price(price_tag.text)
+                price_old = extract_price(old_price_tag.text) if old_price_tag else 0.0
+                discount = round((1 - (price_new / price_old)) * 100) if price_old > price_new > 0 else 0
+
+                if discount > 0:
+                    results.append({
+                        "title": title,
+                        "url": f"{link}?tag={AFFILIATE_TAG}",
+                        "image": image,
+                        "price_new": price_new,
+                        "price_old": price_old,
+                        "discount": discount
+                    })
+
+                if len(results) >= MAX_PRODUCTS:
+                    break
+            if len(results) >= MAX_PRODUCTS:
+                break
+        return results
+
+
+async def post_to_group(bot):
+    products = await fetch_products()
+    if not products:
         logger.warning("Nenhum produto encontrado.")
         return
 
-    for produto in produtos[:5]:  # envia até 5 por vez
-        legenda = (
-            f"🔥 *{produto['titulo']}*\n"
-            f"💰 Preço: *R${produto['preco']}* (-{produto['desconto']}%)\n"
-            f"🛒 [Compre aqui]({produto['link']})"
+    for p in products:
+        msg = (
+            f"<b>{p['title']}</b>\n"
+            f"💰 <b>R$ {p['price_new']:.2f}</b> "
+        )
+        if p['price_old'] > p['price_new']:
+            msg += f"(de R$ {p['price_old']:.2f}) 🔻 {p['discount']}% OFF\n"
+        msg += "\nClique abaixo para ver na Amazon 👇"
+
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("Ver oferta na Amazon", url=p['url'])]]
         )
 
         try:
             await bot.send_photo(
-                chat_id=CHAT_ID,
-                photo=produto["imagem"],
-                caption=legenda,
-                parse_mode="Markdown"
+                chat_id=GROUP_ID,
+                photo=p["image"],
+                caption=msg,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
             )
-            await asyncio.sleep(5)  # pequeno intervalo entre postagens
+            logger.info(f"Produto postado: {p['title']}")
         except Exception as e:
             logger.error(f"Erro ao enviar produto: {e}")
 
-# --------------------------------------------------------
-# COMANDO /start_posting PARA ATIVAR AS POSTAGENS
-# --------------------------------------------------------
-async def start_posting(update, context):
-    await update.message.reply_text("🤖 Postagens automáticas ativadas a cada 1 minuto.")
-    context.job_queue.run_repeating(postar_ofertas_automaticamente, interval=INTERVALO, first=5)
+    logger.info("Rodada finalizada ✅")
 
-# --------------------------------------------------------
-# MAIN - INICIALIZA O BOT
-# --------------------------------------------------------
+
 async def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    bot = Bot(BOT_TOKEN)
+    while True:
+        await post_to_group(bot)
+        await asyncio.sleep(INTERVAL_MIN * 60)
 
-    app.add_handler(CommandHandler("start_posting", start_posting))
 
-    logger.info("Bot iniciado e aguardando comando /start_posting")
-    await app.run_polling()
-
-# --------------------------------------------------------
-# EXECUÇÃO CORRIGIDA (para evitar erro de loop)
-# --------------------------------------------------------
 if __name__ == "__main__":
-    nest_asyncio.apply()
-    try:
-        asyncio.get_event_loop().run_until_complete(main())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot encerrado manualmente.")
+    asyncio.run(main())

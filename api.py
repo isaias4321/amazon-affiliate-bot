@@ -1,96 +1,130 @@
 import os
-import aiohttp
-import asyncio
-import random
 import logging
-from typing import Dict, Any
+import requests
+import time
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from colorama import Fore, Style
+from colorama import Fore, Style, init
 
-app = FastAPI()
+# Inicializa cor no terminal (Railway mostra cores)
+init(autoreset=True)
 
-# 🔧 Configurações
-SCRAPEOPS_KEY = os.getenv("SCRAPEOPS_API_KEY")
-AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
-SCRAPEOPS_URL = "https://proxy.scrapeops.io/v1/"
+app = FastAPI(title="Amazon Affiliate API", version="2.0")
 
-# Fallbacks em caso de falha
-FALLBACK_PRODUCTS = {
-    "notebook": [{"titulo": "Notebook Genérico", "preco": "R$ 2.499", "link": "https://amzn.to/fallback1"}],
-    "celular": [{"titulo": "Smartphone Genérico", "preco": "R$ 1.199", "link": "https://amzn.to/fallback2"}],
-    "processador": [{"titulo": "Processador Genérico", "preco": "R$ 999", "link": "https://amzn.to/fallback3"}],
-    "ferramenta": [{"titulo": "Ferramenta Genérica", "preco": "R$ 249", "link": "https://amzn.to/fallback4"}],
-    "eletrodoméstico": [{"titulo": "Eletrodoméstico Genérico", "preco": "R$ 499", "link": "https://amzn.to/fallback5"}],
-}
-
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15",
-]
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# Configuração de logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
+# Variáveis de ambiente
+SCRAPEOPS_API_KEY = os.getenv("SCRAPEOPS_API_KEY")
+AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
 
-async def fetch_via_scrapeops(session: aiohttp.ClientSession, term: str, render_js: bool = False) -> str:
+# Endpoint base da ScrapeOps
+BASE_URL = "https://api.scrapeops.io/scrapers/amazon-search"
+
+# ---------------------------
+# Função de busca principal
+# ---------------------------
+def buscar_produtos(categoria: str):
+    """Busca produtos da Amazon via ScrapeOps API"""
+    if not SCRAPEOPS_API_KEY:
+        logger.error(Fore.RED + "❌ SCRAPEOPS_API_KEY ausente!" + Style.RESET_ALL)
+        return []
+
     params = {
-        "api_key": SCRAPEOPS_KEY,
-        "url": f"https://www.amazon.com.br/s?k={term.replace(' ', '+')}&tag={AFFILIATE_TAG}",
-        "render_js": str(render_js).lower(),
-        "country": "br"
+        "api_key": SCRAPEOPS_API_KEY,
+        "search_term": categoria,
+        "amazon_domain": "amazon.com.br",
+        "num_results": 10,
     }
+
     headers = {
-        "User-Agent": random.choice(USER_AGENTS),
-        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/118.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
     }
 
-    async with session.get(SCRAPEOPS_URL, params=params, headers=headers, timeout=40) as resp:
-        logger.info(f"🧠 ScrapeOps retornou status {resp.status} para '{term}'")
-        if resp.status == 200:
-            return await resp.text()
-        raise Exception(f"ScrapeOps retornou {resp.status}")
+    for tentativa in range(3):
+        try:
+            response = requests.get(BASE_URL, params=params, headers=headers, timeout=30)
+
+            if response.status_code == 200:
+                data = response.json()
+                results = data.get("results", [])
+
+                if results:
+                    logger.info(Fore.GREEN + f"✅ {len(results)} resultados encontrados para '{categoria}'" + Style.RESET_ALL)
+                    produtos = []
+                    for item in results[:5]:
+                        titulo = item.get("title")
+                        preco = item.get("price_string", "Preço indisponível")
+                        url = item.get("url")
+
+                        # Adiciona o affiliate tag à URL
+                        if url and "tag=" not in url:
+                            separador = "&" if "?" in url else "?"
+                            url = f"{url}{separador}tag={AFFILIATE_TAG}"
+
+                        produtos.append({
+                            "titulo": titulo,
+                            "preco": preco,
+                            "url": url
+                        })
+                    return produtos
+                else:
+                    logger.warning(Fore.YELLOW + f"⚠️ Nenhum produto encontrado para '{categoria}'" + Style.RESET_ALL)
+                    return []
+
+            else:
+                logger.warning(Fore.RED + f"⚠️ Erro HTTP {response.status_code} ao buscar '{categoria}'" + Style.RESET_ALL)
+
+        except Exception as e:
+            logger.error(Fore.RED + f"❌ Exceção ao buscar '{categoria}': {e}" + Style.RESET_ALL)
+
+        espera = 2 * (tentativa + 1)
+        logger.info(Fore.CYAN + f"🔁 Tentando novamente em {espera}s..." + Style.RESET_ALL)
+        time.sleep(espera)
+
+    logger.error(Fore.RED + f"❌ Falha ao buscar '{categoria}' após várias tentativas" + Style.RESET_ALL)
+    return []
 
 
-async def buscar_produto(term: str) -> Dict[str, Any]:
-    if not SCRAPEOPS_KEY:
-        logger.warning(f"{Fore.YELLOW}⚠️ SCRAPEOPS_API_KEY ausente, usando fallback...{Style.RESET_ALL}")
-        return random.choice(FALLBACK_PRODUCTS.get(term, [{"titulo": term, "preco": "N/A", "link": "#"}]))
-
-    backoff = 1
-    async with aiohttp.ClientSession() as session:
-        for attempt in range(1, 5):
-            try:
-                render_js = attempt >= 3
-                html = await fetch_via_scrapeops(session, term, render_js)
-                # Aqui normalmente você faria o parse do HTML
-                logger.info(f"{Fore.GREEN}✅ Sucesso ao buscar {term}{Style.RESET_ALL}")
-                return {
-                    "titulo": f"Oferta {term.title()}",
-                    "preco": f"R$ {random.randint(1000, 5000):,.2f}".replace(",", "."),
-                    "link": f"https://www.amazon.com.br/s?k={term.replace(' ', '+')}&tag={AFFILIATE_TAG}"
-                }
-            except Exception as e:
-                logger.warning(f"{Fore.RED}Tentativa {attempt} falhou para {term}: {e}{Style.RESET_ALL}")
-                await asyncio.sleep(backoff)
-                backoff *= 2
-
-        logger.error(f"{Fore.RED}Todas tentativas falharam para {term}, usando fallback...{Style.RESET_ALL}")
-        return random.choice(FALLBACK_PRODUCTS.get(term, [{"titulo": term, "preco": "N/A", "link": "#"}]))
+# ---------------------------
+# Endpoint principal da API
+# ---------------------------
+@app.get("/")
+async def root():
+    return JSONResponse({
+        "status": "ok",
+        "mensagem": "🚀 API de Ofertas da Amazon rodando com ScrapeOps!",
+        "instruções": "/ofertas?q=termo"
+    })
 
 
-@app.get("/buscar")
-async def buscar(query: str):
-    try:
-        resultado = await buscar_produto(query)
-        return JSONResponse(content={
-            "status": "ok",
-            "query": query,
-            "resultado": resultado
-        })
-    except Exception as e:
-        logger.error(f"❌ Erro geral ao buscar {query}: {e}")
-        return JSONResponse(content={
+@app.get("/ofertas")
+async def ofertas(q: str):
+    if not q:
+        return JSONResponse({"erro": "Parâmetro 'q' obrigatório."}, status_code=400)
+
+    logger.info(Fore.BLUE + f"🔍 Buscando ofertas para '{q}'..." + Style.RESET_ALL)
+    produtos = buscar_produtos(q)
+
+    if not produtos:
+        return JSONResponse({
             "status": "erro",
-            "mensagem": str(e)
-        }, status_code=500)
+            "mensagem": f"Nenhum produto encontrado para '{q}'"
+        }, status_code=404)
+
+    return JSONResponse({
+        "status": "sucesso",
+        "query": q,
+        "quantidade": len(produtos),
+        "produtos": produtos
+    })

@@ -4,7 +4,6 @@ import requests
 import logging
 import asyncio 
 from telegram import Bot
-# Alteração: Importamos ParseMode
 from telegram.constants import ParseMode 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler 
 
@@ -84,26 +83,32 @@ def buscar_ofertas_amazon():
 async def enviar_oferta_telegram(oferta):
     """
     Formata e envia a mensagem de oferta para o grupo do Telegram usando formatação HTML.
+    Inclui um link oculto para forçar a prévia da imagem.
     """
     
-    # FORMATANDO USANDO SINTAXE HTML: <b>negrito</b>, <i>itálico</i>, <strike>riscado</strike>
+    # FORMATANDO USANDO SINTAXE HTML
     mensagem = (
         f"🔥 <b>OFERTA IMPERDÍVEL AMAZON ({oferta['categoria'].upper()})</b> 🔥\n\n"
         f"🛒 <i>{oferta['nome']}</i>\n\n"
         f"🏷️ De: <strike>{oferta['preco_antigo']}</strike>\n"
         f"✅ <b>POR APENAS: {oferta['preco_atual']}</b>\n"
         f"💥 <i>Economize {oferta['desconto']}!</i> \n\n"
-        # CORREÇÃO: Uso da tag HTML <a> para garantir o link clicável
+        # Link Clicável: Aparece formatado.
         f"➡️ <a href=\"{oferta['link_afiliado']}\">CLIQUE AQUI PARA GARANTIR!</a>"
+        
+        # LINK SECUNDÁRIO/OCULTO: Esta linha força a prévia da imagem.
+        # O link de afiliado é repetido com uma entidade de espaço em branco de largura zero
+        # para que o link apareça no final e ative a prévia da URL.
+        f"\n\n<a href=\"{oferta['link_afiliado']}\">&#8203;</a>"
     )
     
     try:
         await bot.send_message( 
             chat_id=GROUP_CHAT_ID,
             text=mensagem,
-            # CRUCIAL: Mudar para ParseMode.HTML
+            # Mantemos o ParseMode.HTML
             parse_mode=ParseMode.HTML,
-            # Mantenha a prévia da página web (foto do produto) ativada
+            # Mantenha esta configuração para permitir a prévia
             disable_web_page_preview=False 
         )
         logger.info(f"Oferta enviada: {oferta['nome']}")

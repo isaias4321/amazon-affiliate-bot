@@ -1,5 +1,4 @@
 import os
-import time
 import logging
 import asyncio
 import aiohttp
@@ -19,13 +18,14 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 GROUP_ID = os.getenv("GROUP_ID", "")
 AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
-SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
+RAIN_API_KEY = os.getenv("RAIN_API_KEY", "")
 
-if not TELEGRAM_TOKEN or not GROUP_CHAT_ID or not RAIN_API_KEY:
-    logger.error("❌ Variáveis de ambiente ausentes! Verifique TELEGRAM_TOKEN, GROUP_CHAT_ID e RAIN_API_KEY.")
+# Verificação de variáveis obrigatórias
+if not BOT_TOKEN or not GROUP_ID or not RAIN_API_KEY:
+    logger.error("❌ Variáveis de ambiente ausentes! Verifique BOT_TOKEN, GROUP_ID e RAIN_API_KEY.")
     raise SystemExit("Erro de configuração")
 
-bot = Bot(token=TELEGRAM_TOKEN)
+bot = Bot(token=BOT_TOKEN)
 
 # ===============================
 # 🔍 FUNÇÃO: Buscar produtos via Rainforest API
@@ -80,7 +80,7 @@ async def enviar_oferta(produto: dict, categoria: str):
 
     try:
         await bot.send_photo(
-            chat_id=GROUP_CHAT_ID,
+            chat_id=GROUP_ID,
             photo=produto["imagem"],
             caption=legenda,
             parse_mode=ParseMode.HTML,
@@ -104,7 +104,7 @@ async def job_busca_e_envio():
 
         for produto in produtos:
             await enviar_oferta(produto, categoria)
-            await asyncio.sleep(10)  # Evita flood no Telegram
+            await asyncio.sleep(10)
 
     logger.info("✅ Ciclo concluído!")
 
@@ -116,12 +116,12 @@ async def main():
     logger.info(f"Tag de Afiliado: {AFFILIATE_TAG}")
 
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(job_busca_e_envio, "interval", minutes=2)
-    await job_busca_e_envio()  # executa uma vez ao iniciar
+    scheduler.add_job(job_busca_e_envio, "interval", minutes=30)
+    await job_busca_e_envio()
     scheduler.start()
 
     try:
-        await asyncio.Future()  # mantém o bot ativo
+        await asyncio.Future()
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
         logger.info("🛑 Bot encerrado.")

@@ -1,119 +1,101 @@
+from fastapi import FastAPI
 import os
-import asyncio
 import logging
 import aiohttp
-from telegram import Bot
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import asyncio
 
-# === CONFIGURAÇÕES ===
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A")
-AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
-GROUP_ID = int(os.getenv("GROUP_ID", "-4983279500"))
-RAIN_API_KEY = os.getenv("RAIN_API_KEY")  # <- Chave da Rainforest API
+app = FastAPI()
 
-CATEGORIAS = ["notebook", "processador", "celular", "ferramenta", "eletrodoméstico"]
-
-# === LOGGING ===
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-bot = Bot(token=BOT_TOKEN)
+# ===============================
+# 🔧 CONFIGURAÇÕES
+# ===============================
+AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
+RAIN_API_KEY = os.getenv("RAIN_API_KEY")
 
-# === FUNÇÃO PARA BUSCAR OFERTAS ===
-async def buscar_ofertas(session, categoria):
-    url = "https://api.rainforestapi.com/request"
-    params = {
-        "api_key": RAIN_API_KEY,
-        "type": "search",
-        "amazon_domain": "amazon.com.br",
-        "search_term": categoria,
-    }
+if not RAIN_API_KEY:
+    logger.error("❌ ERRO: variável RAIN_API_KEY não configurada no Railway!")
+    raise SystemExit("RAIN_API_KEY ausente — adicione no painel do Railway.")
 
-    try:
-        async with session.get(url, params=params, timeout=30) as resp:
-            if resp.status != 200:
-                logger.warning(f"Erro HTTP {resp.status} ao buscar {categoria}")
-                return []
+CATEGORIES = [
+    "notebook",
+    "processador",
+    "celular",
+    "ferramenta",
+    "eletrodoméstico"
+]
 
-            data = await resp.json()
-            produtos = []
-
-            for item in data.get("search_results", [])[:5]:
-                titulo = item.get("title")
-                preco = item.get("price", {}).get("raw", "Preço indisponível")
-                imagem = item.get("image")
-                link = item.get("link")
-
-                if not titulo or not link:
-                    continue
-
-                link_afiliado = f"{link}?tag={AFFILIATE_TAG}"
-                produtos.append({
-                    "titulo": titulo,
-                    "preco": preco,
-                    "imagem": imagem,
-                    "url": link_afiliado
-                })
-
-            return produtos
-
-    except Exception as e:
-        logger.error(f"Erro ao buscar {categoria}: {e}")
-        return []
-
-
-# === ENVIO DE OFERTAS ===
-async def enviar_ofertas():
-    logger.info("🔄 Iniciando ciclo de busca e envio de ofertas...")
+# ===============================
+# 🔍 FUNÇÃO: Buscar produtos via Rainforest API
+# ===============================
+async def buscar_produtos_rainforest(query: str, limit: int = 5):
+    """Busca produtos usando a Rainforest API."""
+    url = (
+        f"https://api.rainforestapi.com/request?"
+        f"api_key={RAIN_API_KEY}&type=search&amazon_domain=amazon.com.br"
+        f"&search_term={query.replace(' ', '+')}"
+        f"&language=pt_BR"
+    )
 
     async with aiohttp.ClientSession() as session:
-        todas_ofertas = []
+        try:
+            async with session.get(url, timeout=20) as resp:
+                if resp.status != 200:
+                    logger.warning(f"Erro HTTP {resp.status} ao buscar {query}")
+                    return []
+                data = await resp.json()
+        except Exception as e:
+            logger.error(f"Erro ao buscar {query}: {e}")
+            return []
 
-        for categoria in CATEGORIAS:
-            ofertas = await buscar_ofertas(session, categoria)
-            if ofertas:
-                todas_ofertas.extend(ofertas)
-            else:
-                logger.warning(f"Nenhuma oferta encontrada para {categoria}")
+    # Extrair resultados
+    produtos = []
+    results = data.get("search_results", [])
+    for item in results[:limit]:
+        title = item.get("title")
+        link = item.get("link")
+        image = item.get("image")
+        price = item.get("price", {}).get("raw") if item.get("price") else "N/A"
 
-        if not todas_ofertas:
-            logger.info("Nenhuma oferta encontrada neste ciclo.")
-            return
+        if title and link:
+            # Adiciona o link de afiliado
+            sep = "&" if "?" in link else "?"
+            link_afiliado = f"{link}{sep}tag={AFFILIATE_TAG}"
 
-        for oferta in todas_ofertas:
-            try:
-                msg = f"💥 <b>{oferta['titulo']}</b>\n💰 {oferta['preco']}\n🔗 <a href='{oferta['url']}'>Ver na Amazon</a>"
-                await bot.send_photo(
-                    chat_id=GROUP_ID,
-                    photo=oferta["imagem"],
-                    caption=msg,
-                    parse_mode="HTML"
-                )
-                await asyncio.sleep(3)
-            except Exception as e:
-                logger.error(f"Erro ao enviar oferta: {e}")
+            produtos.append({
+                "title": title,
+                "price": price,
+                "url": link_afiliado,
+                "image": image or "",
+            })
 
-    logger.info("✅ Ciclo de envio concluído.")
-
-
-# === AGENDAMENTO ===
-async def job_busca_e_envio():
-    await enviar_ofertas()
-
-
-async def main():
-    logger.info("🤖 Bot de Ofertas Amazon iniciado com sucesso!")
-    logger.info(f"Tag de Afiliado: {AFFILIATE_TAG}")
-
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(job_busca_e_envio, "interval", minutes=60)
-    scheduler.start()
-
-    await enviar_ofertas()  # executa imediatamente
-
-    while True:
-        await asyncio.sleep(3600)
+    return produtos
 
 
+# ===============================
+# 🌐 ROTAS FASTAPI
+# ===============================
+@app.get("/")
+def root():
+    return {"message": "🚀 API do Bot de Ofertas Amazon com Rainforest ativa!"}
+
+
+@app.get("/buscar")
+async def buscar(q: str = "notebook"):
+    produtos = await buscar_produtos_rainforest(q)
+    return {"query": q, "count": len(produtos), "results": produtos}
+
+
+# ===============================
+# 🧠 TESTE LOCAL (opcional)
+# ===============================
 if __name__ == "__main__":
-    asyncio.run(main())
+    async def test():
+        for cat in CATEGORIES:
+            produtos = await buscar_produtos_rainforest(cat)
+            print(f"\nCategoria: {cat}")
+            for p in produtos:
+                print(f"- {p['title']} | {p['price']}")
+    asyncio.run(test())

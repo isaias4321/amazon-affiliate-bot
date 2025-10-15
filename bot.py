@@ -19,7 +19,10 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', 'TOKEN_VAZIO')
 GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID', 'ID_VAZIO')
-AFFILIATE_TAG = os.getenv('AFFILIATE_TAG', 'isaias06f-20') 
+
+# CORREÇÃO CRÍTICA: Definindo a Tag de Afiliado DIRETAMENTE no código
+# SUBSTITUA 'SUA_TAG_REAL_AQUI' pela sua tag de afiliado exata (ex: 'isaias06f-20')
+AFFILIATE_TAG = 'isaias06f-20' 
 
 # Inicialização do bot
 if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == 'TOKEN_VAZIO':
@@ -30,7 +33,7 @@ bot = Bot(token=TELEGRAM_TOKEN)
 
 
 # -----------------------------------------------------
-# 3. Funções de Busca (SIMULAÇÃO CLÁSSICA) - CORRIGIDA AQUI
+# 3. Funções de Busca (SIMULAÇÃO CLÁSSICA)
 # -----------------------------------------------------
 
 def buscar_ofertas_amazon():
@@ -44,8 +47,7 @@ def buscar_ofertas_amazon():
     # Mapeamento dos dados de simulação
     ofertas_simuladas = [
         {
-            # ASIN é o código único do produto Amazon, é tudo que precisamos para o link
-            # Use um ASIN de 10 dígitos que você tenha certeza que existe na Amazon BR para testar!
+            # ASIN é o código único do produto Amazon. Use ASINs reais da Amazon BR para testar!
             'asin': 'B09V74XXXX', 
             'nome': 'NOTEBOOK GAMER: O Mais Potente da Amazon (40% OFF!)',
             'preco_atual': 'R$ 4.299,00',

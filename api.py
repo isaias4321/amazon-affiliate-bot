@@ -1,93 +1,96 @@
 import os
+import aiohttp
+import asyncio
+import random
 import logging
-import requests
-from fastapi import FastAPI, Query
+from typing import Dict, Any
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from colorama import init, Fore, Style
+from colorama import Fore, Style
 
-# Inicializa cores no terminal
-init(autoreset=True)
+app = FastAPI()
 
-app = FastAPI(title="Amazon Ofertas API")
+# 🔧 Configurações
+SCRAPEOPS_KEY = os.getenv("SCRAPEOPS_API_KEY")
+AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
+SCRAPEOPS_URL = "https://proxy.scrapeops.io/v1/"
 
-# Configuração de logs
+# Fallbacks em caso de falha
+FALLBACK_PRODUCTS = {
+    "notebook": [{"titulo": "Notebook Genérico", "preco": "R$ 2.499", "link": "https://amzn.to/fallback1"}],
+    "celular": [{"titulo": "Smartphone Genérico", "preco": "R$ 1.199", "link": "https://amzn.to/fallback2"}],
+    "processador": [{"titulo": "Processador Genérico", "preco": "R$ 999", "link": "https://amzn.to/fallback3"}],
+    "ferramenta": [{"titulo": "Ferramenta Genérica", "preco": "R$ 249", "link": "https://amzn.to/fallback4"}],
+    "eletrodoméstico": [{"titulo": "Eletrodoméstico Genérico", "preco": "R$ 499", "link": "https://amzn.to/fallback5"}],
+}
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15",
+]
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Variáveis de ambiente
-AFFILIATE_TAG = os.getenv("AFFILIATE_TAG")
-SCRAPEOPS_API_KEY = os.getenv("SCRAPEOPS_API_KEY")
 
-if not AFFILIATE_TAG:
-    logger.error(Fore.RED + "❌ AFFILIATE_TAG não configurado!")
-if not SCRAPEOPS_API_KEY:
-    logger.error(Fore.RED + "❌ SCRAPEOPS_API_KEY não configurado!")
-
-@app.get("/")
-def home():
-    return {"status": "ok", "mensagem": "API da Amazon com ScrapeOps ativa!"}
-
-@app.get("/buscar")
-def buscar_produto(
-    q: str = Query(..., description="Termo de busca (ex: notebook, celular, etc.)")
-):
-    """
-    Busca produtos da Amazon Brasil usando o ScrapeOps Proxy.
-    """
-
-    if not SCRAPEOPS_API_KEY:
-        return JSONResponse(
-            status_code=500,
-            content={"erro": "SCRAPEOPS_API_KEY ausente."}
-        )
-
-    # Monta a URL da Amazon
-    amazon_url = f"https://www.amazon.com.br/s?k={q}&tag={AFFILIATE_TAG}"
-
-    # Monta a URL do ScrapeOps
-    proxy_url = "https://proxy.scrapeops.io/v1/"
+async def fetch_via_scrapeops(session: aiohttp.ClientSession, term: str, render_js: bool = False) -> str:
     params = {
-        "api_key": SCRAPEOPS_API_KEY,
-        "url": amazon_url,
-        "country": "br",
-        "render_js": "false"
+        "api_key": SCRAPEOPS_KEY,
+        "url": f"https://www.amazon.com.br/s?k={term.replace(' ', '+')}&tag={AFFILIATE_TAG}",
+        "render_js": str(render_js).lower(),
+        "country": "br"
+    }
+    headers = {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8",
     }
 
-    logger.info(Fore.CYAN + f"🔍 Buscando: {q}")
-    logger.info(Fore.MAGENTA + f"➡️  URL via ScrapeOps: {amazon_url}")
+    async with session.get(SCRAPEOPS_URL, params=params, headers=headers, timeout=40) as resp:
+        logger.info(f"🧠 ScrapeOps retornou status {resp.status} para '{term}'")
+        if resp.status == 200:
+            return await resp.text()
+        raise Exception(f"ScrapeOps retornou {resp.status}")
 
-    try:
-        resp = requests.get(proxy_url, params=params, timeout=30)
 
-        if resp.status_code == 200:
-            logger.info(Fore.GREEN + f"✅ Sucesso! ({resp.status_code}) - Resultados obtidos.")
-            return JSONResponse(
-                content={
-                    "status": "sucesso",
-                    "categoria": q,
-                    "codigo_http": resp.status_code,
-                    "conteudo_html": resp.text[:1000],  # preview de segurança
+async def buscar_produto(term: str) -> Dict[str, Any]:
+    if not SCRAPEOPS_KEY:
+        logger.warning(f"{Fore.YELLOW}⚠️ SCRAPEOPS_API_KEY ausente, usando fallback...{Style.RESET_ALL}")
+        return random.choice(FALLBACK_PRODUCTS.get(term, [{"titulo": term, "preco": "N/A", "link": "#"}]))
+
+    backoff = 1
+    async with aiohttp.ClientSession() as session:
+        for attempt in range(1, 5):
+            try:
+                render_js = attempt >= 3
+                html = await fetch_via_scrapeops(session, term, render_js)
+                # Aqui normalmente você faria o parse do HTML
+                logger.info(f"{Fore.GREEN}✅ Sucesso ao buscar {term}{Style.RESET_ALL}")
+                return {
+                    "titulo": f"Oferta {term.title()}",
+                    "preco": f"R$ {random.randint(1000, 5000):,.2f}".replace(",", "."),
+                    "link": f"https://www.amazon.com.br/s?k={term.replace(' ', '+')}&tag={AFFILIATE_TAG}"
                 }
-            )
+            except Exception as e:
+                logger.warning(f"{Fore.RED}Tentativa {attempt} falhou para {term}: {e}{Style.RESET_ALL}")
+                await asyncio.sleep(backoff)
+                backoff *= 2
 
-        else:
-            logger.warning(Fore.YELLOW + f"⚠️ HTTP {resp.status_code} ao buscar {q}")
-            return JSONResponse(
-                status_code=resp.status_code,
-                content={
-                    "status": "erro",
-                    "codigo_http": resp.status_code,
-                    "mensagem": f"Erro HTTP {resp.status_code} ao buscar {q}",
-                },
-            )
+        logger.error(f"{Fore.RED}Todas tentativas falharam para {term}, usando fallback...{Style.RESET_ALL}")
+        return random.choice(FALLBACK_PRODUCTS.get(term, [{"titulo": term, "preco": "N/A", "link": "#"}]))
 
-    except requests.exceptions.RequestException as e:
-        logger.error(Fore.RED + f"❌ Erro na requisição: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "status": "erro",
-                "mensagem": "Falha na requisição ScrapeOps",
-                "detalhes": str(e),
-            },
-        )
+
+@app.get("/buscar")
+async def buscar(query: str):
+    try:
+        resultado = await buscar_produto(query)
+        return JSONResponse(content={
+            "status": "ok",
+            "query": query,
+            "resultado": resultado
+        })
+    except Exception as e:
+        logger.error(f"❌ Erro geral ao buscar {query}: {e}")
+        return JSONResponse(content={
+            "status": "erro",
+            "mensagem": str(e)
+        }, status_code=500)

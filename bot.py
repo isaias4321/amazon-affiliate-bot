@@ -2,10 +2,12 @@ import os
 import time
 import requests
 import logging
-# Corrigido o ImportError: ParseMode agora é importado de telegram.constants
+# Importação assíncrona necessária para rodar o agendador
+import asyncio 
 from telegram import Bot
 from telegram.constants import ParseMode 
-from apscheduler.schedulers.background import BackgroundScheduler
+# Mudança para o agendador assíncrono para resolver o RuntimeWarning
+from apscheduler.schedulers.asyncio import AsyncIOScheduler 
 
 # -----------------------------------------------------
 # 1. Configuração do Logging
@@ -17,13 +19,10 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------
 # 2. Variáveis de Ambiente (Railway)
 # -----------------------------------------------------
-# O script irá buscar as variáveis que você configurou no painel do Railway.
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', 'TOKEN_VAZIO')
 GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID', 'ID_VAZIO')
 AFFILIATE_TAG = os.getenv('AFFILIATE_TAG', 'isaias06f-20')
 
-# Inicialização do bot
-# O script verifica se o token existe antes de iniciar o Bot
 if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == 'TOKEN_VAZIO':
     logger.error("ERRO: TELEGRAM_TOKEN não configurado. O bot não pode iniciar.")
     exit(1)
@@ -35,18 +34,15 @@ bot = Bot(token=TELEGRAM_TOKEN)
 # 3. Funções de Busca (SIMULAÇÃO)
 # -----------------------------------------------------
 
+# A função de busca permanece síncrona, pois só está simulando a lógica.
 def buscar_ofertas_amazon():
     """
-    SIMULA a busca por ofertas nas categorias desejadas.
-    
-    ATENÇÃO: Este código DEVE ser substituído pela sua integração real com 
-    a Amazon PA API, usando as chaves secretas e filtrando as categorias:
-    Ferramentas, Peças de Computador, Notebooks, Celulares, Eletrodomésticos.
+    SIMULA a busca por ofertas. SUBSTITUA ESTE CÓDIGO pela sua integração real com 
+    a Amazon PA API, usando as chaves secretas.
     """
     
     logger.info("Executando a simulação de busca de ofertas na Amazon...")
     
-    # Lista de ofertas simuladas
     ofertas_simuladas = [
         {
             'nome': 'NOTEBOOK GAMER: O Mais Potente da Amazon (40% OFF!)',
@@ -74,20 +70,18 @@ def buscar_ofertas_amazon():
         }
     ]
     
-    # Adicionando a Tag de Afiliado aos links
     for oferta in ofertas_simuladas:
-        # Garante que a tag de afiliado seja anexada corretamente ao link
         if '?' in oferta['link_original']:
             oferta['link_afiliado'] = f"{oferta['link_original']}&tag={AFFILIATE_TAG}"
         else:
             oferta['link_afiliado'] = f"{oferta['link_original']}?tag={AFFILIATE_TAG}"
             
-    # Na simulação, vamos retornar todas as ofertas para a demonstração
     return ofertas_simuladas
 
-def enviar_oferta_telegram(oferta):
+# Tornamos a função assíncrona (async) e usamos await
+async def enviar_oferta_telegram(oferta):
     """
-    Formata e envia a mensagem de oferta para o grupo do Telegram.
+    Formata e envia a mensagem de oferta para o grupo do Telegram de forma assíncrona.
     """
     
     mensagem = (
@@ -100,11 +94,11 @@ def enviar_oferta_telegram(oferta):
     )
     
     try:
-        # Envia a mensagem usando ParseMode.MARKDOWN_V2 (para garantir o negrito/itálico)
-        bot.send_message(
+        # Usamos await na chamada de send_message para resolver o RuntimeWarning
+        await bot.send_message(
             chat_id=GROUP_CHAT_ID,
             text=mensagem,
-            parse_mode=ParseMode.MARKDOWN, # Usa ParseMode.MARKDOWN para compatibilidade geral
+            parse_mode=ParseMode.MARKDOWN,
             disable_web_page_preview=False 
         )
         logger.info(f"Oferta enviada: {oferta['nome']}")
@@ -116,7 +110,8 @@ def enviar_oferta_telegram(oferta):
 # 4. Agendamento Principal (Scheduler)
 # -----------------------------------------------------
 
-def job_busca_e_envio():
+# Tornamos a função assíncrona (async) e usamos await
+async def job_busca_e_envio():
     """
     Função chamada pelo agendador. Busca ofertas e as envia.
     """
@@ -131,41 +126,46 @@ def job_busca_e_envio():
     if ofertas:
         logger.info(f"Encontradas {len(ofertas)} ofertas.")
         for oferta in ofertas:
-            enviar_oferta_telegram(oferta)
-            # Pausa de 10 segundos entre os envios
-            time.sleep(10) 
+            await enviar_oferta_telegram(oferta)
+            # time.sleep() não deve ser usado em código assíncrono. Usamos asyncio.sleep.
+            await asyncio.sleep(10) 
     else:
         logger.info("Nenhuma oferta significativa encontrada neste ciclo.")
 
-def main():
+# Usamos async def no main para rodar o agendador assíncrono
+async def main():
     """
-    Configura o agendador e mantém o programa rodando.
+    Configura o agendador e mantém o programa rodando de forma assíncrona.
     """
     logger.info("Bot de Ofertas Amazon (Railway) iniciando...")
-    logger.info(f"Tag de Afiliado: {AFFILIATE_TAG}")
     
-    # Cria o agendador
-    scheduler = BackgroundScheduler()
+    # Cria o agendador assíncrono
+    scheduler = AsyncIOScheduler()
     
     # Adiciona a tarefa: executa a função 'job_busca_e_envio' a cada 60 minutos
     scheduler.add_job(job_busca_e_envio, 'interval', minutes=60)
     
-    # Para testar, execute a primeira vez imediatamente
-    job_busca_e_envio()
+    # Executa a primeira vez imediatamente
+    await job_busca_e_envio()
     
     # Inicia o agendador
     scheduler.start()
     
     logger.info("Agendador iniciado. Próximo ciclo em 60 minutos.")
 
-    # Loop infinito para manter o processo de worker rodando no Railway
+    # Loop para manter o worker rodando
     try:
+        # Roda o loop de eventos assíncronos
         while True:
-            time.sleep(10)
+            await asyncio.sleep(10)
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
         logger.info("Bot de Ofertas encerrado.")
 
 
 if __name__ == '__main__':
-    main()
+    # Roda a função principal assíncrona
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        logger.error(f"Erro fatal ao iniciar o loop: {e}")

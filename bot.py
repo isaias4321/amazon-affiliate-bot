@@ -111,10 +111,14 @@ def iniciar_bot():
 def root():
     return {"status": "ok", "mensagem": "🤖 Bot de ofertas Amazon ativo!"}
 
-# Thread para rodar o bot e o servidor juntos
-def iniciar_thread_bot():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(asyncio.to_thread(iniciar_bot))
+# Thread separada para o servidor
+def iniciar_fastapi():
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8080)
 
-Thread(target=iniciar_bot).start()
+# ======================================================
+# INICIALIZAÇÃO
+# ======================================================
+if __name__ == "__main__":
+    Thread(target=iniciar_fastapi, daemon=True).start()
+    iniciar_bot()

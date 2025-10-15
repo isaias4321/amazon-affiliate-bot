@@ -1,51 +1,115 @@
+import aiohttp
+import asyncio
+from bs4 import BeautifulSoup
 from fastapi import FastAPI
-from pydantic import BaseModel
-import random
+from fastapi.responses import JSONResponse
+from colorama import init, Fore
 import logging
+import time
 
-app = FastAPI(title="Amazon Affiliate Bot API")
+# Inicializa colorama
+init(autoreset=True)
 
-# Configuração básica de logging
-logging.basicConfig(level=logging.INFO)
+# FastAPI
+app = FastAPI(title="Amazon Offers API", version="3.0")
+
+# Logger colorido
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler()
+formatter = logging.Formatter("%(asctime)s - %(message)s", datefmt="%H:%M:%S")
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 
-# Model da requisição
-class Item(BaseModel):
-    categoria: str
+# Função de scraping real
+async def buscar_amazon(categoria: str):
+    url = f"https://www.amazon.com.br/s?k={categoria.replace(' ', '+')}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/119.0 Safari/537.36"
+    }
 
-# Exemplo de banco de ofertas simulado
-OFERTAS_FAKE = {
-    "notebook": [
-        {"titulo": "Notebook Lenovo Ideapad 3", "preco": "R$ 2.799,00", "link": "https://amzn.to/3QbFxHt"},
-        {"titulo": "Notebook Acer Aspire 5", "preco": "R$ 3.199,00", "link": "https://amzn.to/3WenFRs"}
-    ],
-    "processador": [
-        {"titulo": "Ryzen 5 5600G", "preco": "R$ 899,00", "link": "https://amzn.to/4fKnq2H"},
-        {"titulo": "Intel Core i5 12400F", "preco": "R$ 999,00", "link": "https://amzn.to/4fJEb8W"}
-    ],
-    "celular": [
-        {"titulo": "Samsung Galaxy A15", "preco": "R$ 1.099,00", "link": "https://amzn.to/3AAaQJE"},
-        {"titulo": "Redmi Note 13", "preco": "R$ 1.299,00", "link": "https://amzn.to/3AEuGzL"}
-    ],
-    "ferramenta": [
-        {"titulo": "Parafusadeira Bosch 12V", "preco": "R$ 479,00", "link": "https://amzn.to/3WjE6MV"},
-        {"titulo": "Furadeira Philco 550W", "preco": "R$ 249,00", "link": "https://amzn.to/4gN3a4K"}
-    ],
-    "eletrodoméstico": [
-        {"titulo": "Air Fryer Mondial 4L", "preco": "R$ 349,00", "link": "https://amzn.to/3Q3xJZb"},
-        {"titulo": "Liquidificador Oster", "preco": "R$ 199,00", "link": "https://amzn.to/4gK5TNY"}
-    ]
-}
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as resp:
+            if resp.status != 200:
+                raise Exception(f"Erro HTTP {resp.status}")
+            html = await resp.text()
+
+    soup = BeautifulSoup(html, "html.parser")
+    itens = soup.select("div[data-asin][data-component-type='s-search-result']")
+
+    resultados = []
+    for item in itens[:5]:  # pega apenas os 5 primeiros
+        titulo = item.select_one("h2 a span")
+        preco = item.select_one(".a-price span.a-offscreen")
+        link = item.select_one("h2 a")
+
+        if not (titulo and preco and link):
+            continue
+
+        resultados.append({
+            "titulo": titulo.text.strip(),
+            "preco": preco.text.strip(),
+            "link": "https://www.amazon.com.br" + link["href"]
+        })
+
+    return resultados
+
+
+# Rota principal
+@app.get("/buscar")
+async def buscar(q: str):
+    inicio = time.time()
+    logger.info(Fore.CYAN + f"🔍 Buscando ofertas reais de: {q}")
+
+    try:
+        resultados = await buscar_amazon(q)
+        tempo = round(time.time() - inicio, 2)
+
+        if not resultados:
+            logger.warning(Fore.YELLOW + f"⚠️ Nenhum produto encontrado para {q}")
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "status": "no_results",
+                    "categoria": q,
+                    "tempo_resposta": f"{tempo}s",
+                    "mensagem": "Nenhum produto encontrado",
+                }
+            )
+
+        logger.info(Fore.GREEN + f"✅ {len(resultados)} ofertas encontradas em {tempo}s")
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "categoria": q,
+                "tempo_resposta": f"{tempo}s",
+                "quantidade": len(resultados),
+                "produtos": resultados,
+            },
+        )
+
+    except Exception as e:
+        logger.error(Fore.RED + f"❌ Erro ao buscar {q}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "categoria": q,
+                "mensagem": str(e),
+            },
+        )
+
 
 @app.get("/")
-def home():
-    return {"status": "ok", "mensagem": "API do Amazon Affiliate Bot está online 🚀"}
-
-@app.post("/buscar")
-def buscar(item: Item):
-    categoria = item.categoria.lower()
-    logger.info(f"🛍️ Buscando ofertas para categoria: {categoria}")
-    ofertas = OFERTAS_FAKE.get(categoria)
-    if not ofertas:
-        return {"erro": f"Nenhuma oferta encontrada para '{categoria}'"}
-    return {"categoria": categoria, "oferta": random.choice(ofertas)}
+async def root():
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "online",
+            "mensagem": "API de Ofertas Amazon funcionando 🚀",
+            "exemplo": "/buscar?q=notebook",
+        },
+    )

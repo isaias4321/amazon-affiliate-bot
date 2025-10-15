@@ -30,14 +30,13 @@ bot = Bot(token=TELEGRAM_TOKEN)
 
 
 # -----------------------------------------------------
-# 3. Funções de Busca (SIMULAÇÃO)
+# 3. Funções de Busca (SIMULAÇÃO) - CORRIGIDO PARA INCLUIR IMAGEM
 # -----------------------------------------------------
 
 def buscar_ofertas_amazon():
     """
     SIMULA a busca por ofertas nas categorias desejadas.
-    
-    ATENÇÃO: ESTE CÓDIGO DEVE SER SUBSTITUÍDO PELA INTEGRAÇÃO REAL COM A AMAZON PA API.
+    Adiciona uma URL de imagem simulada para que o bot possa enviar a foto.
     """
     
     logger.info("Executando a simulação de busca de ofertas na Amazon...")
@@ -50,7 +49,9 @@ def buscar_ofertas_amazon():
             'preco_antigo': 'R$ 7.165,00',
             'desconto': '40%',
             'link_original': 'https://www.amazon.com.br/dp/B09V74XXXX', 
-            'categoria': 'Notebooks'
+            'categoria': 'Notebooks',
+            # URL de Imagem SIMULADA. TROQUE POR UMA REAL PARA TESTES!
+            'imagem_url': 'https://m.media-amazon.com/images/I/71Yt4rVn-pL._AC_SX679_.jpg' 
         },
         {
             'nome': 'PROCESSADOR HIGH-END: Velocidade Máxima (30% de Desconto)',
@@ -58,7 +59,9 @@ def buscar_ofertas_amazon():
             'preco_antigo': 'R$ 2.857,00',
             'desconto': '30%',
             'link_original': 'https://www.amazon.com.br/dp/B08S3XXXX2A',
-            'categoria': 'Peças de Computador'
+            'categoria': 'Peças de Computador',
+            # URL de Imagem SIMULADA. TROQUE POR UMA REAL PARA TESTES!
+            'imagem_url': 'https://m.media-amazon.com/images/I/71Yt4rVn-pL._AC_SX679_.jpg'
         },
         {
             'nome': 'Kit Chaves de Precisão para Reparos (25% OFF)',
@@ -66,7 +69,9 @@ def buscar_ofertas_amazon():
             'preco_antigo': 'R$ 133,20',
             'desconto': '25%',
             'link_original': 'https://www.amazon.com.br/dp/B07YQXXXXXX',
-            'categoria': 'Ferramentas'
+            'categoria': 'Ferramentas',
+            # URL de Imagem SIMULADA. TROQUE POR UMA REAL PARA TESTES!
+            'imagem_url': 'https://m.media-amazon.com/images/I/71Yt4rVn-pL._AC_SX679_.jpg'
         }
     ]
     
@@ -79,41 +84,36 @@ def buscar_ofertas_amazon():
             
     return ofertas_simuladas
 
-# Agora é uma função assíncrona (async def)
+# ALTERADO: Agora usa send_photo
 async def enviar_oferta_telegram(oferta):
     """
-    Formata e envia a mensagem de oferta para o grupo do Telegram usando formatação HTML.
-    Inclui um link oculto para forçar a prévia da imagem.
+    Envia a foto (imagem_url) com o texto formatado como legenda (caption).
     """
     
-    # FORMATANDO USANDO SINTAXE HTML
+    # FORMATANDO O TEXTO PARA SER A LEGENDA DA FOTO (CAPTION)
     mensagem = (
         f"🔥 <b>OFERTA IMPERDÍVEL AMAZON ({oferta['categoria'].upper()})</b> 🔥\n\n"
         f"🛒 <i>{oferta['nome']}</i>\n\n"
         f"🏷️ De: <strike>{oferta['preco_antigo']}</strike>\n"
         f"✅ <b>POR APENAS: {oferta['preco_atual']}</b>\n"
         f"💥 <i>Economize {oferta['desconto']}!</i> \n\n"
-        # Link Clicável: Aparece formatado.
+        # Link Clicável: A tag HTML <a> garante a formatação
         f"➡️ <a href=\"{oferta['link_afiliado']}\">CLIQUE AQUI PARA GARANTIR!</a>"
-        
-        # LINK SECUNDÁRIO/OCULTO: Esta linha força a prévia da imagem.
-        # O link de afiliado é repetido com uma entidade de espaço em branco de largura zero
-        # para que o link apareça no final e ative a prévia da URL.
-        f"\n\n<a href=\"{oferta['link_afiliado']}\">&#8203;</a>"
     )
     
     try:
-        await bot.send_message( 
+        # CRUCIAL: Uso de send_photo com a URL da imagem e o texto como legenda
+        await bot.send_photo( 
             chat_id=GROUP_CHAT_ID,
-            text=mensagem,
-            # Mantemos o ParseMode.HTML
-            parse_mode=ParseMode.HTML,
-            # Mantenha esta configuração para permitir a prévia
-            disable_web_page_preview=False 
+            photo=oferta['imagem_url'], # O Telegram baixa e envia a imagem dessa URL
+            caption=mensagem,          # O texto formatado vai como legenda da foto
+            parse_mode=ParseMode.HTML, # Mantemos o HTML para a legenda
         )
         logger.info(f"Oferta enviada: {oferta['nome']}")
     except Exception as e:
-        logger.error(f"Erro ao enviar mensagem para o grupo {GROUP_CHAT_ID}. Verifique o ID e se o bot é administrador: {e}")
+        logger.error(f"Erro ao enviar FOTO/mensagem para o grupo {GROUP_CHAT_ID}: {e}")
+        # Tenta enviar apenas o texto em caso de falha de envio da foto (ex: URL inválida)
+        await bot.send_message(chat_id=GROUP_CHAT_ID, text=mensagem, parse_mode=ParseMode.HTML)
 
 
 # -----------------------------------------------------

@@ -4,6 +4,7 @@ import requests
 import logging
 import asyncio 
 from telegram import Bot
+# Alteração: Importamos ParseMode
 from telegram.constants import ParseMode 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler 
 
@@ -82,25 +83,27 @@ def buscar_ofertas_amazon():
 # Agora é uma função assíncrona (async def)
 async def enviar_oferta_telegram(oferta):
     """
-    Formata e envia a mensagem de oferta para o grupo do Telegram de forma assíncrona.
+    Formata e envia a mensagem de oferta para o grupo do Telegram usando formatação HTML.
     """
     
-    # Formatação do link para garantir que o bot envie o link e a foto (prévia).
+    # FORMATANDO USANDO SINTAXE HTML: <b>negrito</b>, <i>itálico</i>, <strike>riscado</strike>
     mensagem = (
-        f"🔥 **OFERTA IMPERDÍVEL AMAZON ({oferta['categoria'].upper()})** 🔥\n\n"
-        f"🛒 *{oferta['nome']}*\n\n"
-        f"🏷️ De: ~{oferta['preco_antigo']}~\n"
-        f"✅ **POR APENAS: {oferta['preco_atual']}**\n"
-        f"💥 *Economize {oferta['desconto']}!* \n\n"
-        f"➡️ [CLIQUE AQUI PARA GARANTIR!]( {oferta['link_afiliado']} )"
+        f"🔥 <b>OFERTA IMPERDÍVEL AMAZON ({oferta['categoria'].upper()})</b> 🔥\n\n"
+        f"🛒 <i>{oferta['nome']}</i>\n\n"
+        f"🏷️ De: <strike>{oferta['preco_antigo']}</strike>\n"
+        f"✅ <b>POR APENAS: {oferta['preco_atual']}</b>\n"
+        f"💥 <i>Economize {oferta['desconto']}!</i> \n\n"
+        # CORREÇÃO: Uso da tag HTML <a> para garantir o link clicável
+        f"➡️ <a href=\"{oferta['link_afiliado']}\">CLIQUE AQUI PARA GARANTIR!</a>"
     )
     
     try:
         await bot.send_message( 
             chat_id=GROUP_CHAT_ID,
             text=mensagem,
-            parse_mode=ParseMode.MARKDOWN,
-            # Mantém a prévia da página web (foto do produto) ativada
+            # CRUCIAL: Mudar para ParseMode.HTML
+            parse_mode=ParseMode.HTML,
+            # Mantenha a prévia da página web (foto do produto) ativada
             disable_web_page_preview=False 
         )
         logger.info(f"Oferta enviada: {oferta['nome']}")
@@ -142,7 +145,7 @@ async def main():
     
     scheduler = AsyncIOScheduler() 
     
-    # CORREÇÃO DE FREQUÊNCIA: Executa a cada 2 minutos
+    # Frequência: 2 minutos
     scheduler.add_job(job_busca_e_envio, 'interval', minutes=2)
     
     # Executa a primeira vez imediatamente
@@ -150,7 +153,6 @@ async def main():
     
     scheduler.start()
     
-    # LOG ATUALIZADO
     logger.info("Agendador iniciado. Próximo ciclo em 2 minutos.")
 
     # Mantém o loop assíncrono rodando infinitamente

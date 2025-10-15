@@ -30,16 +30,19 @@ bot = Bot(token=TELEGRAM_TOKEN)
 
 
 # -----------------------------------------------------
-# 3. Funções de Busca (SIMULAÇÃO) - CORRIGIDO PARA INCLUIR IMAGEM
+# 3. Funções de Busca (SIMULAÇÃO) - CORRIGIDO PARA USAR URL DE TESTE
 # -----------------------------------------------------
 
 def buscar_ofertas_amazon():
     """
     SIMULA a busca por ofertas nas categorias desejadas.
-    Adiciona uma URL de imagem simulada para que o bot possa enviar a foto.
+    ATENÇÃO: A IMAGEM_URL FOI SUBSTITUÍDA POR UMA URL DE TESTE CONFIÁVEL.
     """
     
     logger.info("Executando a simulação de busca de ofertas na Amazon...")
+    
+    # URL DE IMAGEM DE TESTE - Se esta funcionar, o problema são as URLs da Amazon.
+    URL_IMAGEM_TESTE = 'https://picsum.photos/400/300' 
     
     # Lista de ofertas simuladas
     ofertas_simuladas = [
@@ -50,8 +53,8 @@ def buscar_ofertas_amazon():
             'desconto': '40%',
             'link_original': 'https://www.amazon.com.br/dp/B09V74XXXX', 
             'categoria': 'Notebooks',
-            # URL de Imagem SIMULADA. TROQUE POR UMA REAL PARA TESTES!
-            'imagem_url': 'https://m.media-amazon.com/images/I/71Yt4rVn-pL._AC_SX679_.jpg' 
+            # Usando a URL de teste
+            'imagem_url': URL_IMAGEM_TESTE 
         },
         {
             'nome': 'PROCESSADOR HIGH-END: Velocidade Máxima (30% de Desconto)',
@@ -60,8 +63,8 @@ def buscar_ofertas_amazon():
             'desconto': '30%',
             'link_original': 'https://www.amazon.com.br/dp/B08S3XXXX2A',
             'categoria': 'Peças de Computador',
-            # URL de Imagem SIMULADA. TROQUE POR UMA REAL PARA TESTES!
-            'imagem_url': 'https://m.media-amazon.com/images/I/71Yt4rVn-pL._AC_SX679_.jpg'
+            # Usando a URL de teste
+            'imagem_url': URL_IMAGEM_TESTE
         },
         {
             'nome': 'Kit Chaves de Precisão para Reparos (25% OFF)',
@@ -70,8 +73,8 @@ def buscar_ofertas_amazon():
             'desconto': '25%',
             'link_original': 'https://www.amazon.com.br/dp/B07YQXXXXXX',
             'categoria': 'Ferramentas',
-            # URL de Imagem SIMULADA. TROQUE POR UMA REAL PARA TESTES!
-            'imagem_url': 'https://m.media-amazon.com/images/I/71Yt4rVn-pL._AC_SX679_.jpg'
+            # Usando a URL de teste
+            'imagem_url': URL_IMAGEM_TESTE
         }
     ]
     
@@ -84,7 +87,7 @@ def buscar_ofertas_amazon():
             
     return ofertas_simuladas
 
-# ALTERADO: Agora usa send_photo
+# ALTERADO: Usa send_photo (com fallback para message em caso de erro)
 async def enviar_oferta_telegram(oferta):
     """
     Envia a foto (imagem_url) com o texto formatado como legenda (caption).
@@ -97,22 +100,21 @@ async def enviar_oferta_telegram(oferta):
         f"🏷️ De: <strike>{oferta['preco_antigo']}</strike>\n"
         f"✅ <b>POR APENAS: {oferta['preco_atual']}</b>\n"
         f"💥 <i>Economize {oferta['desconto']}!</i> \n\n"
-        # Link Clicável: A tag HTML <a> garante a formatação
         f"➡️ <a href=\"{oferta['link_afiliado']}\">CLIQUE AQUI PARA GARANTIR!</a>"
     )
     
     try:
-        # CRUCIAL: Uso de send_photo com a URL da imagem e o texto como legenda
+        # CRUCIAL: Uso de send_photo
         await bot.send_photo( 
             chat_id=GROUP_CHAT_ID,
-            photo=oferta['imagem_url'], # O Telegram baixa e envia a imagem dessa URL
-            caption=mensagem,          # O texto formatado vai como legenda da foto
-            parse_mode=ParseMode.HTML, # Mantemos o HTML para a legenda
+            photo=oferta['imagem_url'], # URL de imagem (agora de teste)
+            caption=mensagem,          
+            parse_mode=ParseMode.HTML, 
         )
         logger.info(f"Oferta enviada: {oferta['nome']}")
     except Exception as e:
-        logger.error(f"Erro ao enviar FOTO/mensagem para o grupo {GROUP_CHAT_ID}: {e}")
-        # Tenta enviar apenas o texto em caso de falha de envio da foto (ex: URL inválida)
+        # Se a foto falhar, envia apenas a mensagem de texto (fallback)
+        logger.error(f"Erro ao enviar FOTO/mensagem para o grupo {GROUP_CHAT_ID}: {e}. Tentando enviar apenas texto...")
         await bot.send_message(chat_id=GROUP_CHAT_ID, text=mensagem, parse_mode=ParseMode.HTML)
 
 

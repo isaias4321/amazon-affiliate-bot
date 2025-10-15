@@ -1,3 +1,5 @@
 python-telegram-bot==20.8
 apscheduler
 requests
+# Adiciona as dependências necessárias para o agendador assíncrono:
+asyncio

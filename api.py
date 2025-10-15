@@ -1,85 +1,84 @@
-import aiohttp
-import sqlite3
 from fastapi import FastAPI, Query
-from bs4 import BeautifulSoup
-import time
+from fastapi.responses import JSONResponse
+import aiohttp
+import os
+import random
+import logging
 
-app = FastAPI(title="Amazon Scraper API")
+# ===============================
+# 🔧 CONFIGURAÇÃO
+# ===============================
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-AFILIADO = "isaias06f-20"
-CACHE_TEMPO = 3600  # 1 hora
+app = FastAPI(title="Amazon Offers API")
 
-conn = sqlite3.connect("cache.db", check_same_thread=False)
-conn.execute("""
-CREATE TABLE IF NOT EXISTS produtos (
-    termo TEXT PRIMARY KEY,
-    titulo TEXT,
-    preco TEXT,
-    imagem TEXT,
-    link TEXT,
-    timestamp REAL
-)
-""")
-conn.commit()
+RAIN_API_KEY = os.getenv("RAIN_API_KEY")
+AFFILIATE_TAG = os.getenv("AFFILIATE_TAG")
 
+if not RAIN_API_KEY:
+    logger.warning("⚠️ Variável RAIN_API_KEY ausente! As requisições podem falhar.")
+if not AFFILIATE_TAG:
+    logger.warning("⚠️ Variável AFFILIATE_TAG ausente! Os links não terão tag de afiliado.")
 
-async def buscar_amazon(termo: str):
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0 Safari/537.36"
-        )
-    }
-    url = f"https://www.amazon.com.br/s?k={termo.replace(' ', '+')}"
+# ===============================
+# 🧠 FUNÇÃO AUXILIAR
+# ===============================
+async def buscar_produtos(termo: str):
+    """
+    Simula uma busca na Amazon usando API pública de ofertas (substituto da PA API).
+    Retorna até 5 produtos aleatórios no formato padronizado.
+    """
+    url = f"https://api.rainforestapi.com/request?api_key={RAIN_API_KEY}&type=search&amazon_domain=amazon.com.br&search_term={termo}"
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as resp:
-            html = await resp.text()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=30) as resp:
+                if resp.status != 200:
+                    logger.warning(f"Erro HTTP {resp.status} ao buscar {termo}")
+                    return []
 
-    soup = BeautifulSoup(html, "html.parser")
-    item = soup.select_one("div[data-component-type='s-search-result']")
-    if not item:
-        return None
+                data = await resp.json()
+    except Exception as e:
+        logger.error(f"Erro ao buscar {termo}: {e}")
+        return []
 
-    titulo = item.h2.text.strip() if item.h2 else "Sem título"
-    link_tag = item.select_one("a.a-link-normal")
-    link = f"https://www.amazon.com.br{link_tag['href']}" if link_tag else None
-    imagem_tag = item.select_one("img.s-image")
-    imagem = imagem_tag["src"] if imagem_tag else None
-    preco_span = item.select_one("span.a-price > span.a-offscreen")
-    preco = preco_span.text.strip() if preco_span else "Indisponível"
+    produtos = []
+    resultados = data.get("search_results", [])
 
-    if link and AFILIADO not in link:
-        sep = "&" if "?" in link else "?"
-        link = f"{link}{sep}tag={AFILIADO}"
+    for item in resultados[:5]:
+        titulo = item.get("title")
+        preco = item.get("price", {}).get("raw", "Preço indisponível")
+        imagem = item.get("image")
+        link = item.get("link")
 
-    return {"titulo": titulo, "preco": preco, "imagem": imagem, "link": link}
+        if AFFILIATE_TAG and "tag=" not in link:
+            separador = "&" if "?" in link else "?"
+            link = f"{link}{separador}tag={AFFILIATE_TAG}"
 
+        produtos.append({
+            "titulo": titulo,
+            "preco": preco,
+            "imagem": imagem,
+            "link": link
+        })
 
+    random.shuffle(produtos)
+    return produtos
+
+# ===============================
+# 📦 ENDPOINT PRINCIPAL
+# ===============================
 @app.get("/buscar")
-async def buscar_produto(q: str = Query(..., description="Termo de busca")):
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM produtos WHERE termo=?", (q,))
-    row = cur.fetchone()
+async def buscar(q: str = Query(..., description="Termo da busca")):
+    produtos = await buscar_produtos(q)
+    if not produtos:
+        return JSONResponse({"erro": f"Nenhum produto encontrado para '{q}'"}, status_code=404)
+    return produtos
 
-    if row and (time.time() - row[-1]) < CACHE_TEMPO:
-        return {
-            "titulo": row[1],
-            "preco": row[2],
-            "imagem": row[3],
-            "link": row[4],
-            "cache": True
-        }
-
-    produto = await buscar_amazon(q)
-    if not produto:
-        return {"erro": "Nenhum produto encontrado"}
-
-    conn.execute(
-        "REPLACE INTO produtos VALUES (?, ?, ?, ?, ?, ?)",
-        (q, produto["titulo"], produto["preco"], produto["imagem"], produto["link"], time.time())
-    )
-    conn.commit()
-
-    return {**produto, "cache": False}
+# ===============================
+# 🏠 ROTA RAIZ
+# ===============================
+@app.get("/")
+def home():
+    return {"status": "✅ API Amazon funcionando!", "endpoints": ["/buscar?q=notebook"]}

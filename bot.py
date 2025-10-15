@@ -2,7 +2,11 @@ import os
 import time
 import requests
 import logging
-from telegram import Bot, ParseMode
+# -------------------------------------------------------------------------
+# CORREÇÃO AQUI:
+from telegram import Bot
+from telegram.constants import ParseMode 
+# -------------------------------------------------------------------------
 from apscheduler.schedulers.background import BackgroundScheduler
 
 # -----------------------------------------------------

@@ -5,19 +5,36 @@ import time
 from telegram import Bot
 from apscheduler.schedulers.background import BackgroundScheduler
 
-# Configurações
+# ------------------------------------------------------------
+# 🔧 CONFIGURAÇÕES DAS VARIÁVEIS DE AMBIENTE (Railway)
+# ------------------------------------------------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = os.getenv("GROUP_ID")
-AFFILIATE_TAG = os.getenv("AFFILIATE_TAG")
+AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
 SERPAPI_KEY = os.getenv("SERPAPI_KEY")
 
+# ------------------------------------------------------------
+# 🛑 VERIFICAÇÃO DE VARIÁVEIS OBRIGATÓRIAS
+# ------------------------------------------------------------
+if not all([BOT_TOKEN, GROUP_ID, AFFILIATE_TAG, SERPAPI_KEY]):
+    logging.error("❌ Variáveis de ambiente ausentes! Verifique BOT_TOKEN, GROUP_ID, AFFILIATE_TAG e SERPAPI_KEY.")
+    raise SystemExit("Erro de configuração")
+
+# ------------------------------------------------------------
+# 🧠 CONFIGURAÇÕES DO BOT
+# ------------------------------------------------------------
 CATEGORIAS = ["notebook", "processador", "celular", "ferramenta", "eletrodoméstico"]
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 bot = Bot(token=BOT_TOKEN)
 
-
+# ------------------------------------------------------------
+# 🔍 FUNÇÃO PARA BUSCAR PRODUTOS VIA SERPAPI
+# ------------------------------------------------------------
 def buscar_produtos(categoria):
     try:
         url = "https://serpapi.com/search.json"
@@ -63,7 +80,9 @@ def buscar_produtos(categoria):
         logger.error(f"Erro ao buscar produtos de {categoria}: {e}")
         return []
 
-
+# ------------------------------------------------------------
+# 🚀 FUNÇÃO PARA ENVIAR PRODUTOS NO TELEGRAM
+# ------------------------------------------------------------
 def enviar_produtos():
     logger.info("🔄 Iniciando ciclo de busca e envio de ofertas...")
     total = 0
@@ -91,11 +110,15 @@ def enviar_produtos():
     else:
         logger.info(f"✅ {total} produtos enviados com sucesso!")
 
-
+# ------------------------------------------------------------
+# ⏰ AGENDAMENTO DE EXECUÇÃO
+# ------------------------------------------------------------
 def job_busca_e_envio():
     enviar_produtos()
 
-
+# ------------------------------------------------------------
+# 🧩 EXECUÇÃO PRINCIPAL
+# ------------------------------------------------------------
 if __name__ == "__main__":
     logger.info("🤖 Bot de Ofertas Amazon iniciado com sucesso!")
     logger.info(f"Tag de Afiliado: {AFFILIATE_TAG}")
@@ -104,7 +127,9 @@ if __name__ == "__main__":
     scheduler.add_job(job_busca_e_envio, "interval", hours=1)
     scheduler.start()
 
+    # Executa imediatamente no início
     enviar_produtos()
 
+    # Mantém o processo ativo
     while True:
         time.sleep(60)

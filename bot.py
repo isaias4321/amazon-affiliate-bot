@@ -7,6 +7,12 @@ from telegram import Bot
 from telegram.constants import ParseMode 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler 
 
+# NOVO: Importa a biblioteca da Amazon PA API
+from paapi5_python_sdk.api.default_api import DefaultApi
+from paapi5_python_sdk.models.search_items_request import SearchItemsRequest
+from paapi5_python_sdk.models.search_items_resource import SearchItemsResource
+from paapi5_python_sdk.models.partner_type import PartnerType
+
 # -----------------------------------------------------
 # 1. Configuração do Logging
 # -----------------------------------------------------
@@ -15,11 +21,19 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------
-# 2. Variáveis de Ambiente (Railway)
+# 2. Variáveis de Ambiente (Railway) - NOVAS CHAVES DA AMAZON
 # -----------------------------------------------------
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', 'TOKEN_VAZIO')
 GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID', 'ID_VAZIO')
-AFFILIATE_TAG = os.getenv('AFFILIATE_TAG', 'isaias06f-20')
+AFFILIATE_TAG = os.getenv('AFFILIATE_TAG', 'isaias06f-20') # Usado no link final
+# CHAVES DA AMAZON PA API (Configure no Railway!)
+PAAPI_ACCESS_KEY = os.getenv('PAAPI_ACCESS_KEY', 'CHAVE_VAZIA')
+PAAPI_SECRET_KEY = os.getenv('PAAPI_SECRET_KEY', 'SECRETO_VAZIO')
+PAAPI_PARTNER_TAG = os.getenv('PAAPI_PARTNER_TAG', AFFILIATE_TAG) # Sua tag de afiliado principal
+
+# Configurações regionais
+HOST = 'webservices.amazon.com.br'  # Para o Brasil
+REGION = 'us-east-1'              # Região de serviço da API para o Brasil
 
 # Inicialização do bot
 if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == 'TOKEN_VAZIO':
@@ -30,64 +44,126 @@ bot = Bot(token=TELEGRAM_TOKEN)
 
 
 # -----------------------------------------------------
-# 3. Funções de Busca (SIMULAÇÃO) - CORRIGIDO PARA USAR URL DE TESTE
+# 3. Funções de Busca (INTEGRAÇÃO REAL COM PA API)
 # -----------------------------------------------------
 
 def buscar_ofertas_amazon():
     """
-    SIMULA a busca por ofertas nas categorias desejadas.
-    ATENÇÃO: A IMAGEM_URL FOI SUBSTITUÍDA POR UMA URL DE TESTE CONFIÁVEL.
+    Tenta buscar ofertas reais usando a Amazon Product Advertising API.
+    A API retorna a URL da imagem (o que resolve seu problema).
     """
     
-    logger.info("Executando a simulação de busca de ofertas na Amazon...")
+    if PAAPI_ACCESS_KEY == 'CHAVE_VAZIA' or PAAPI_SECRET_KEY == 'SECRETO_VAZIO':
+        logger.error("CHAVES PA API NÃO CONFIGURADAS. Revertendo para simulação (sem imagem real)...")
+        # Retornar uma simulação de fallback para não quebrar o bot
+        return simular_ofertas_fallback()
+
+
+    logger.info("Executando busca real de ofertas na Amazon PA API...")
     
-    # URL DE IMAGEM DE TESTE - Se esta funcionar, o problema são as URLs da Amazon.
-    URL_IMAGEM_TESTE = 'https://picsum.photos/400/300' 
+    # 1. Configurar a API
+    api = DefaultApi(access_key=PAAPI_ACCESS_KEY, secret_key=PAAPI_SECRET_KEY, host=HOST, region=REGION)
     
-    # Lista de ofertas simuladas
-    ofertas_simuladas = [
+    # 2. Definir os recursos que queremos (incluindo preço e imagem)
+    resources = [
+        SearchItemsResource.IMAGES_PRIMARY_LARGE_URL,
+        SearchItemsResource.ITEM_INFO_TITLE,
+        SearchItemsResource.OFFERS_LISTINGS_PRICE,
+        SearchItemsResource.OFFERS_LISTINGS_SAVING_PERCENT,
+        SearchItemsResource.OFFERS_LISTINGS_SAVING_AMOUNT,
+    ]
+    
+    # 3. Definir o que buscar (ex: Notebooks e Processadores)
+    # Este é um exemplo simples. Você deve refinar sua Query.
+    query = "Notebook Gamer e Processador High End"
+    
+    # 4. Montar a requisição
+    try:
+        search_items_request = SearchItemsRequest(
+            partner_tag=PAAPI_PARTNER_TAG,
+            partner_type=PartnerType.ASSOCIATES,
+            search_index='All',
+            item_count=10,
+            keywords=query,
+            resources=resources
+        )
+        
+        # 5. Enviar a requisição (Esta parte requer a assinatura correta)
+        response = api.search_items(search_items_request)
+        
+    except Exception as e:
+        logger.error(f"Erro ao chamar a Amazon PA API: {e}")
+        # Retornar uma simulação de fallback em caso de erro da API
+        return simular_ofertas_fallback()
+
+    
+    # 6. Processar a resposta e formatar as ofertas
+    ofertas_reais = []
+    if response.search_result and response.search_result.items:
+        for item in response.search_result.items:
+            # Pular se faltar preço, imagem ou título
+            if not item.offers or not item.offers.listings or not item.offers.listings[0].price or not item.images or not item.images.primary:
+                continue
+                
+            titulo = item.item_info.title.display_value
+            preco = item.offers.listings[0].price.display_amount
+            link_afiliado = item.detail_page_url # A PA API retorna a URL já com a tag
+            
+            # **A SOLUÇÃO DO SEU PROBLEMA ESTÁ AQUI:** URL da Imagem Real
+            imagem_url = item.images.primary.large.url
+            
+            # Tentar obter o preço antigo e o desconto (pode não existir)
+            try:
+                # A PA API geralmente não retorna o "Preço Antigo" diretamente, mas a % de desconto sim.
+                # Para simplificar, vamos estimar ou usar o saving percent, mas para um preço "De:",
+                # você teria que fazer um cálculo inverso que é complexo e nem sempre possível.
+                desconto = item.offers.listings[0].saving_percent 
+                desconto_texto = f"{desconto}%" if desconto else "Ótimo Preço"
+            except:
+                desconto_texto = "Ótimo Preço"
+
+
+            ofertas_reais.append({
+                'nome': titulo,
+                'preco_atual': preco,
+                'preco_antigo': 'Preço indisponível', # Preenchido assim para fins de demonstração
+                'desconto': desconto_texto,
+                'link_afiliado': link_afiliado,
+                'categoria': 'PA API',
+                'imagem_url': imagem_url # A URL real!
+            })
+    
+    return ofertas_reais
+
+# Função de Simulação de Contingência
+def simular_ofertas_fallback():
+    """ Usado se a API falhar ou não estiver configurada. """
+    logger.info("Retornando ofertas simuladas (sem imagens reais)...")
+    URL_IMAGEM_FALLBACK = 'https://via.placeholder.com/400x300?text=INTEGRE+A+PA+API'
+    return [
         {
             'nome': 'NOTEBOOK GAMER: O Mais Potente da Amazon (40% OFF!)',
             'preco_atual': 'R$ 4.299,00',
             'preco_antigo': 'R$ 7.165,00',
             'desconto': '40%',
-            'link_original': 'https://www.amazon.com.br/dp/B09V74XXXX', 
+            'link_afiliado': f'https://www.amazon.com.br/dp/B09V74XXXX?tag={AFFILIATE_TAG}', 
             'categoria': 'Notebooks',
-            # Usando a URL de teste
-            'imagem_url': URL_IMAGEM_TESTE 
+            'imagem_url': URL_IMAGEM_FALLBACK
         },
         {
             'nome': 'PROCESSADOR HIGH-END: Velocidade Máxima (30% de Desconto)',
             'preco_atual': 'R$ 1.999,90',
             'preco_antigo': 'R$ 2.857,00',
             'desconto': '30%',
-            'link_original': 'https://www.amazon.com.br/dp/B08S3XXXX2A',
+            'link_afiliado': f'https://www.amazon.com.br/dp/B08S3XXXX2A?tag={AFFILIATE_TAG}',
             'categoria': 'Peças de Computador',
-            # Usando a URL de teste
-            'imagem_url': URL_IMAGEM_TESTE
-        },
-        {
-            'nome': 'Kit Chaves de Precisão para Reparos (25% OFF)',
-            'preco_atual': 'R$ 99,90',
-            'preco_antigo': 'R$ 133,20',
-            'desconto': '25%',
-            'link_original': 'https://www.amazon.com.br/dp/B07YQXXXXXX',
-            'categoria': 'Ferramentas',
-            # Usando a URL de teste
-            'imagem_url': URL_IMAGEM_TESTE
+            'imagem_url': URL_IMAGEM_FALLBACK
         }
     ]
-    
-    # Adicionando a Tag de Afiliado aos links
-    for oferta in ofertas_simuladas:
-        if '?' in oferta['link_original']:
-            oferta['link_afiliado'] = f"{oferta['link_original']}&tag={AFFILIATE_TAG}"
-        else:
-            oferta['link_afiliado'] = f"{oferta['link_original']}?tag={AFFILIATE_TAG}"
-            
-    return ofertas_simuladas
 
-# ALTERADO: Usa send_photo (com fallback para message em caso de erro)
+# O restante do código (Funções Assíncronas e Main) permanece o mesmo, mas foi incluído abaixo para facilitar o copy/paste completo.
+
+# Usa send_photo (com fallback para message em caso de erro)
 async def enviar_oferta_telegram(oferta):
     """
     Envia a foto (imagem_url) com o texto formatado como legenda (caption).
@@ -97,23 +173,22 @@ async def enviar_oferta_telegram(oferta):
     mensagem = (
         f"🔥 <b>OFERTA IMPERDÍVEL AMAZON ({oferta['categoria'].upper()})</b> 🔥\n\n"
         f"🛒 <i>{oferta['nome']}</i>\n\n"
-        f"🏷️ De: <strike>{oferta['preco_antigo']}</strike>\n"
+        # O preço antigo virá como "Preço indisponível" se a API não fornecer
+        f"🏷️ De: <strike>{oferta['preco_antigo']}</strike>\n" 
         f"✅ <b>POR APENAS: {oferta['preco_atual']}</b>\n"
         f"💥 <i>Economize {oferta['desconto']}!</i> \n\n"
         f"➡️ <a href=\"{oferta['link_afiliado']}\">CLIQUE AQUI PARA GARANTIR!</a>"
     )
     
     try:
-        # CRUCIAL: Uso de send_photo
         await bot.send_photo( 
             chat_id=GROUP_CHAT_ID,
-            photo=oferta['imagem_url'], # URL de imagem (agora de teste)
+            photo=oferta['imagem_url'], 
             caption=mensagem,          
             parse_mode=ParseMode.HTML, 
         )
         logger.info(f"Oferta enviada: {oferta['nome']}")
     except Exception as e:
-        # Se a foto falhar, envia apenas a mensagem de texto (fallback)
         logger.error(f"Erro ao enviar FOTO/mensagem para o grupo {GROUP_CHAT_ID}: {e}. Tentando enviar apenas texto...")
         await bot.send_message(chat_id=GROUP_CHAT_ID, text=mensagem, parse_mode=ParseMode.HTML)
 
@@ -132,13 +207,13 @@ async def job_busca_e_envio():
         
     logger.info("Iniciando ciclo de busca e envio de ofertas.")
     
+    # CHAMA A FUNÇÃO DE BUSCA REAL (OU SIMULAÇÃO, SE FALTAR CHAVES)
     ofertas = buscar_ofertas_amazon() 
     
     if ofertas:
         logger.info(f"Encontradas {len(ofertas)} ofertas.")
         for oferta in ofertas:
             await enviar_oferta_telegram(oferta) 
-            # Pausa assíncrona de 10 segundos entre cada envio de oferta no mesmo ciclo
             await asyncio.sleep(10) 
     else:
         logger.info("Nenhuma oferta significativa encontrada neste ciclo.")
@@ -162,7 +237,6 @@ async def main():
     
     logger.info("Agendador iniciado. Próximo ciclo em 2 minutos.")
 
-    # Mantém o loop assíncrono rodando infinitamente
     try:
         await asyncio.Future()
     except (KeyboardInterrupt, SystemExit):

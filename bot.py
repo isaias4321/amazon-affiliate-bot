@@ -1,75 +1,32 @@
 import os
-import logging
-import asyncio
 import aiohttp
+import asyncio
+import logging
 from telegram import Bot
 from telegram.constants import ParseMode
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# ===============================
-# 🔧 CONFIGURAÇÕES BÁSICAS
-# ===============================
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-GROUP_ID = os.getenv("GROUP_ID", "")
-AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
-RAIN_API_KEY = os.getenv("RAIN_API_KEY", "")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GROUP_ID = os.getenv("GROUP_ID")
+API_URL = os.getenv("API_URL", "http://localhost:8000/buscar")
 
-# Verificação de variáveis obrigatórias
-if not BOT_TOKEN or not GROUP_ID or not RAIN_API_KEY:
-    logger.error("❌ Variáveis de ambiente ausentes! Verifique BOT_TOKEN, GROUP_ID e RAIN_API_KEY.")
-    raise SystemExit("Erro de configuração")
+if not BOT_TOKEN or not GROUP_ID:
+    raise SystemExit("❌ Variáveis de ambiente BOT_TOKEN e GROUP_ID ausentes!")
 
 bot = Bot(token=BOT_TOKEN)
 
-# ===============================
-# 🔍 FUNÇÃO: Buscar produtos via Rainforest API
-# ===============================
-async def buscar_produtos(query: str, limit: int = 3):
-    url = (
-        f"https://api.rainforestapi.com/request?"
-        f"api_key={RAIN_API_KEY}&type=search&amazon_domain=amazon.com.br"
-        f"&search_term={query.replace(' ', '+')}&language=pt_BR"
-    )
-
+async def buscar_produto(categoria: str):
     async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(url, timeout=20) as resp:
-                if resp.status != 200:
-                    logger.warning(f"Erro HTTP {resp.status} ao buscar {query}")
-                    return []
-                data = await resp.json()
-        except Exception as e:
-            logger.error(f"Erro ao buscar {query}: {e}")
-            return []
+        async with session.get(f"{API_URL}?q={categoria}") as resp:
+            data = await resp.json()
+            if "erro" in data:
+                logger.warning(f"Nenhum produto para {categoria}")
+                return None
+            return data
 
-    produtos = []
-    for item in data.get("search_results", [])[:limit]:
-        title = item.get("title")
-        link = item.get("link")
-        image = item.get("image")
-        price = item.get("price", {}).get("raw") if item.get("price") else "N/A"
-
-        if title and link:
-            sep = "&" if "?" in link else "?"
-            link_afiliado = f"{link}{sep}tag={AFFILIATE_TAG}"
-            produtos.append({
-                "titulo": title,
-                "preco": price,
-                "imagem": image,
-                "link": link_afiliado,
-            })
-
-    return produtos
-
-# ===============================
-# 💬 ENVIO PARA O TELEGRAM
-# ===============================
 async def enviar_oferta(produto: dict, categoria: str):
     legenda = (
         f"🔥 <b>OFERTA AMAZON ({categoria.upper()})</b> 🔥\n\n"
@@ -77,7 +34,6 @@ async def enviar_oferta(produto: dict, categoria: str):
         f"💰 <b>Preço:</b> {produto['preco']}\n\n"
         f"👉 <a href=\"{produto['link']}\">Compre com desconto aqui!</a>"
     )
-
     try:
         await bot.send_photo(
             chat_id=GROUP_ID,
@@ -85,49 +41,29 @@ async def enviar_oferta(produto: dict, categoria: str):
             caption=legenda,
             parse_mode=ParseMode.HTML,
         )
-        logger.info(f"✅ Oferta enviada: {produto['titulo']}")
+        logger.info(f"✅ Produto enviado: {produto['titulo']}")
     except Exception as e:
         logger.error(f"Erro ao enviar oferta: {e}")
 
-# ===============================
-# 🔁 CICLO PRINCIPAL
-# ===============================
-async def job_busca_e_envio():
+async def job_busca_envio():
     categorias = ["notebook", "processador", "celular", "ferramenta", "eletrodoméstico"]
-    logger.info("🔄 Iniciando ciclo de busca e envio de ofertas...")
+    logger.info("🔁 Buscando novas ofertas...")
 
     for categoria in categorias:
-        produtos = await buscar_produtos(categoria)
-        if not produtos:
-            logger.warning(f"Nenhum produto encontrado para {categoria}")
-            continue
-
-        for produto in produtos:
+        produto = await buscar_produto(categoria)
+        if produto:
             await enviar_oferta(produto, categoria)
-            await asyncio.sleep(10)
+            await asyncio.sleep(15)
 
     logger.info("✅ Ciclo concluído!")
 
-# ===============================
-# 🚀 MAIN LOOP
-# ===============================
 async def main():
-    logger.info("🤖 Bot de Ofertas Amazon iniciado com sucesso!")
-    logger.info(f"Tag de Afiliado: {AFFILIATE_TAG}")
-
+    logger.info("🤖 Bot iniciado.")
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(job_busca_e_envio, "interval", minutes=30)
-    await job_busca_e_envio()
+    scheduler.add_job(job_busca_envio, "interval", minutes=2)
+    await job_busca_envio()
     scheduler.start()
-
-    try:
-        await asyncio.Future()
-    except (KeyboardInterrupt, SystemExit):
-        scheduler.shutdown()
-        logger.info("🛑 Bot encerrado.")
+    await asyncio.Future()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except Exception as e:
-        logger.error(f"Erro fatal: {e}")
+    asyncio.run(main())

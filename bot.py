@@ -7,132 +7,124 @@ from telegram import Bot
 from telegram.constants import ParseMode
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# -----------------------------------------------------
-# 1. Configuração do Logging
-# -----------------------------------------------------
+# ===============================
+# 🔧 CONFIGURAÇÕES BÁSICAS
+# ===============================
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
-# -----------------------------------------------------
-# 2. Variáveis de Ambiente (Railway)
-# -----------------------------------------------------
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID')
-AFFILIATE_TAG = os.getenv('AFFILIATE_TAG', 'isaias06f-20')
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+GROUP_CHAT_ID = os.getenv("GROUP_CHAT_ID", "")
+AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
+RAIN_API_KEY = os.getenv("RAIN_API_KEY", "")
 
-if not TELEGRAM_TOKEN or not GROUP_CHAT_ID:
-    logger.error("ERRO: TELEGRAM_TOKEN ou GROUP_CHAT_ID não configurado.")
-    exit(1)
+if not TELEGRAM_TOKEN or not GROUP_CHAT_ID or not RAIN_API_KEY:
+    logger.error("❌ Variáveis de ambiente ausentes! Verifique TELEGRAM_TOKEN, GROUP_CHAT_ID e RAIN_API_KEY.")
+    raise SystemExit("Erro de configuração")
 
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# URL da sua API (Railway)
-API_URL = "https://amazon-affiliate-bot-production.up.railway.app/buscar"
+# ===============================
+# 🔍 FUNÇÃO: Buscar produtos via Rainforest API
+# ===============================
+async def buscar_produtos(query: str, limit: int = 3):
+    url = (
+        f"https://api.rainforestapi.com/request?"
+        f"api_key={RAIN_API_KEY}&type=search&amazon_domain=amazon.com.br"
+        f"&search_term={query.replace(' ', '+')}&language=pt_BR"
+    )
 
-# -----------------------------------------------------
-# 3. Funções de Busca de Ofertas (via sua API)
-# -----------------------------------------------------
-async def buscar_ofertas_amazon():
-    """
-    Consulta a API FastAPI hospedada no Railway para buscar produtos com imagem.
-    """
-    categorias = ["notebook", "processador", "celular", "ferramenta", "eletrodoméstico"]
-    ofertas = []
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, timeout=20) as resp:
+                if resp.status != 200:
+                    logger.warning(f"Erro HTTP {resp.status} ao buscar {query}")
+                    return []
+                data = await resp.json()
+        except Exception as e:
+            logger.error(f"Erro ao buscar {query}: {e}")
+            return []
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            for cat in categorias:
-                async with session.get(f"{API_URL}?q={cat}") as resp:
-                    if resp.status != 200:
-                        logger.warning(f"Erro HTTP {resp.status} ao buscar {cat}")
-                        continue
+    produtos = []
+    for item in data.get("search_results", [])[:limit]:
+        title = item.get("title")
+        link = item.get("link")
+        image = item.get("image")
+        price = item.get("price", {}).get("raw") if item.get("price") else "N/A"
 
-                    data = await resp.json()
-                    produtos = data.get("results", [])
-                    for p in produtos:
-                        ofertas.append({
-                            'nome': p['title'],
-                            'preco_atual': p['price'],
-                            'preco_antigo': '—',
-                            'desconto': '—',
-                            'link_afiliado': p['url'],
-                            'categoria': cat.capitalize(),
-                            'imagem': p.get('image', '')
-                        })
-                    await asyncio.sleep(2)  # pequena pausa entre categorias
-    except Exception as e:
-        logger.error(f"Erro ao buscar ofertas: {e}")
+        if title and link:
+            sep = "&" if "?" in link else "?"
+            link_afiliado = f"{link}{sep}tag={AFFILIATE_TAG}"
+            produtos.append({
+                "titulo": title,
+                "preco": price,
+                "imagem": image,
+                "link": link_afiliado,
+            })
 
-    return ofertas
+    return produtos
 
-# -----------------------------------------------------
-# 4. Envio das Ofertas no Telegram
-# -----------------------------------------------------
-async def enviar_oferta_telegram(oferta):
-    """
-    Envia a oferta com imagem (se disponível) e texto formatado em HTML.
-    """
-    mensagem = (
-        f"🔥 <b>OFERTA AMAZON ({oferta['categoria'].upper()})</b> 🔥\n\n"
-        f"🛒 <i>{oferta['nome']}</i>\n\n"
-        f"💰 <b>Preço:</b> {oferta['preco_atual']}\n\n"
-        f"➡️ <a href=\"{oferta['link_afiliado']}\">CLIQUE AQUI PARA VER NA AMAZON</a>"
+# ===============================
+# 💬 ENVIO PARA O TELEGRAM
+# ===============================
+async def enviar_oferta(produto: dict, categoria: str):
+    legenda = (
+        f"🔥 <b>OFERTA AMAZON ({categoria.upper()})</b> 🔥\n\n"
+        f"🛒 <b>{produto['titulo']}</b>\n"
+        f"💰 <b>Preço:</b> {produto['preco']}\n\n"
+        f"👉 <a href=\"{produto['link']}\">Compre com desconto aqui!</a>"
     )
 
     try:
-        if oferta.get('imagem'):
-            await bot.send_photo(
-                chat_id=GROUP_CHAT_ID,
-                photo=oferta['imagem'],
-                caption=mensagem,
-                parse_mode=ParseMode.HTML
-            )
-        else:
-            await bot.send_message(
-                chat_id=GROUP_CHAT_ID,
-                text=mensagem,
-                parse_mode=ParseMode.HTML
-            )
-        logger.info(f"✅ Oferta enviada: {oferta['nome']}")
+        await bot.send_photo(
+            chat_id=GROUP_CHAT_ID,
+            photo=produto["imagem"],
+            caption=legenda,
+            parse_mode=ParseMode.HTML,
+        )
+        logger.info(f"✅ Oferta enviada: {produto['titulo']}")
     except Exception as e:
         logger.error(f"Erro ao enviar oferta: {e}")
 
-# -----------------------------------------------------
-# 5. Ciclo de Busca + Envio
-# -----------------------------------------------------
+# ===============================
+# 🔁 CICLO PRINCIPAL
+# ===============================
 async def job_busca_e_envio():
+    categorias = ["notebook", "processador", "celular", "ferramenta", "eletrodoméstico"]
     logger.info("🔄 Iniciando ciclo de busca e envio de ofertas...")
-    ofertas = await buscar_ofertas_amazon()
 
-    if not ofertas:
-        logger.info("Nenhuma oferta encontrada neste ciclo.")
-        return
+    for categoria in categorias:
+        produtos = await buscar_produtos(categoria)
+        if not produtos:
+            logger.warning(f"Nenhum produto encontrado para {categoria}")
+            continue
 
-    logger.info(f"Encontradas {len(ofertas)} ofertas. Enviando para o grupo...")
-    for oferta in ofertas[:10]:  # limita a 10 por ciclo para evitar flood
-        await enviar_oferta_telegram(oferta)
-        await asyncio.sleep(10)  # pausa entre mensagens
+        for produto in produtos:
+            await enviar_oferta(produto, categoria)
+            await asyncio.sleep(10)  # Evita flood no Telegram
 
-# -----------------------------------------------------
-# 6. Loop Principal e Agendamento
-# -----------------------------------------------------
+    logger.info("✅ Ciclo concluído!")
+
+# ===============================
+# 🚀 MAIN LOOP
+# ===============================
 async def main():
     logger.info("🤖 Bot de Ofertas Amazon iniciado com sucesso!")
     logger.info(f"Tag de Afiliado: {AFFILIATE_TAG}")
 
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(job_busca_e_envio, 'interval', minutes=120)  # a cada 2h
-    await job_busca_e_envio()  # executa imediatamente
+    scheduler.add_job(job_busca_e_envio, "interval", minutes=2)
+    await job_busca_e_envio()  # executa uma vez ao iniciar
     scheduler.start()
 
     try:
-        await asyncio.Future()  # mantém o loop ativo
+        await asyncio.Future()  # mantém o bot ativo
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
-        logger.info("Bot encerrado com segurança.")
+        logger.info("🛑 Bot encerrado.")
 
 if __name__ == "__main__":
     try:

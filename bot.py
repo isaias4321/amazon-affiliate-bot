@@ -1,12 +1,12 @@
 import asyncio
-import nest_asyncio
 import aiohttp
 import logging
 import os
+import nest_asyncio
 from fastapi import FastAPI
-from threading import Thread
 from telegram import Bot
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, JobQueue
+import uvicorn
 
 # ======================================================
 # CONFIGURAÇÕES GERAIS
@@ -17,78 +17,73 @@ logger = logging.getLogger(__name__)
 nest_asyncio.apply()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GROUP_ID = os.getenv("GROUP_ID")  # Exemplo: -4983279500
+GROUP_ID = os.getenv("GROUP_ID")
 API_URL = "https://amazon-affiliate-bot-production.up.railway.app/api/search"
 
 if not BOT_TOKEN or not GROUP_ID:
-    raise ValueError("❌ As variáveis BOT_TOKEN e GROUP_ID precisam estar definidas!")
+    raise ValueError("❌ As variáveis BOT_TOKEN e GROUP_ID precisam estar configuradas!")
 
 bot = Bot(token=BOT_TOKEN)
 app = FastAPI()
 
 # ======================================================
-# FUNÇÃO PARA BUSCAR PRODUTOS NA API
+# FUNÇÃO PARA BUSCAR PRODUTOS DA API
 # ======================================================
 async def buscar_produtos():
     produtos = []
-    palavras_chave = ["notebook", "monitor", "mouse", "cadeira gamer", "ferramentas", "pc gamer"]
+    termos = ["notebook", "monitor", "cadeira gamer", "mouse", "pc gamer", "ferramenta"]
 
     async with aiohttp.ClientSession() as session:
-        for termo in palavras_chave:
+        for termo in termos:
             try:
-                async with session.get(f"{API_URL}?q={termo}") as response:
-                    if response.status == 200:
-                        data = await response.json()
+                async with session.get(f"{API_URL}?q={termo}") as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
                         produtos.extend(data.get("produtos", []))
                     else:
-                        logger.warning(f"⚠️ Erro HTTP {response.status} ao buscar {termo}")
+                        logger.warning(f"⚠️ Erro {resp.status} ao buscar '{termo}'")
             except Exception as e:
-                logger.error(f"❌ Erro ao buscar {termo}: {e}")
+                logger.error(f"❌ Erro ao buscar '{termo}': {e}")
 
     return produtos
 
 # ======================================================
-# FUNÇÃO PARA POSTAR NO GRUPO
+# POSTAR OFERTAS NO GRUPO
 # ======================================================
 async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
     produtos = await buscar_produtos()
     if not produtos:
-        logger.warning("⚠️ Nenhum produto encontrado.")
+        logger.warning("⚠️ Nenhum produto encontrado nesta rodada.")
         return
 
-    for produto in produtos[:5]:
-        nome = produto.get("titulo", "Produto sem nome")
-        preco = produto.get("preco", "Preço indisponível")
-        imagem = produto.get("imagem")
-        link = produto.get("link")
+    for p in produtos[:5]:
+        nome = p.get("titulo", "Produto sem nome")
+        preco = p.get("preco", "Preço indisponível")
+        imagem = p.get("imagem")
+        link = p.get("link")
 
         legenda = f"💥 *{nome}*\n💰 *Preço:* {preco}\n🔗 [Compre agora]({link})"
-
         try:
             if imagem:
-                await bot.send_photo(
-                    chat_id=GROUP_ID,
-                    photo=imagem,
-                    caption=legenda,
-                    parse_mode="Markdown"
-                )
+                await bot.send_photo(chat_id=GROUP_ID, photo=imagem, caption=legenda, parse_mode="Markdown")
             else:
                 await bot.send_message(chat_id=GROUP_ID, text=legenda, parse_mode="Markdown")
-            await asyncio.sleep(5)
+            await asyncio.sleep(3)
         except Exception as e:
-            logger.error(f"❌ Erro ao postar produto: {e}")
+            logger.error(f"❌ Erro ao enviar produto: {e}")
 
 # ======================================================
-# COMANDO /start
+# COMANDOS
 # ======================================================
 async def start(update, context):
-    await update.message.reply_text("🤖 Bot de ofertas iniciado! Enviando promoções a cada minuto.")
+    await update.message.reply_text("🤖 Bot ativo! Enviando ofertas a cada 1 minuto.")
     context.job_queue.run_repeating(postar_ofertas, interval=60, first=5)
 
 # ======================================================
-# FUNÇÃO PRINCIPAL DO BOT
+# INICIALIZAR BOT + FASTAPI JUNTOS
 # ======================================================
-def iniciar_bot():
+async def main():
+    # Inicializa o bot Telegram
     job_queue = JobQueue()
     application = (
         ApplicationBuilder()
@@ -101,24 +96,32 @@ def iniciar_bot():
     job_queue.set_application(application)
     job_queue.run_repeating(postar_ofertas, interval=60, first=10)
 
-    logger.info("🚀 Bot iniciado e aguardando comandos...")
-    application.run_polling()
+    # Inicializa o servidor FastAPI e o bot juntos
+    async def start_fastapi():
+        config = uvicorn.Config(app, host="0.0.0.0", port=8080, log_level="info")
+        server = uvicorn.Server(config)
+        await server.serve()
+
+    logger.info("🚀 Inicializando bot e servidor web...")
+
+    # Executa FastAPI e Telegram simultaneamente
+    await asyncio.gather(application.run_polling(), start_fastapi())
 
 # ======================================================
-# SERVIDOR FASTAPI (mantém Railway ativo)
+# ENDPOINT PARA TESTE MANUAL
 # ======================================================
 @app.get("/")
-def root():
-    return {"status": "ok", "mensagem": "🤖 Bot de ofertas Amazon ativo!"}
+async def root():
+    return {"status": "ok", "mensagem": "🤖 Bot de ofertas ativo no Railway!"}
 
-# Thread separada para o servidor
-def iniciar_fastapi():
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+@app.get("/force")
+async def force_post():
+    """Força o envio manual de uma rodada de ofertas."""
+    await postar_ofertas(None)
+    return {"status": "ok", "mensagem": "📤 Ofertas enviadas manualmente."}
 
 # ======================================================
-# INICIALIZAÇÃO
+# EXECUÇÃO
 # ======================================================
 if __name__ == "__main__":
-    Thread(target=iniciar_fastapi, daemon=True).start()
-    iniciar_bot()
+    asyncio.run(main())

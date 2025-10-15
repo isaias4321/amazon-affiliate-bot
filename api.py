@@ -1,61 +1,62 @@
-from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse
+import os
+import aiohttp
 import logging
-import random
+from fastapi import FastAPI, Query
+from dotenv import load_dotenv
+from rich.logging import RichHandler
 
-# 🔹 Configurar logging colorido
+# ========== CONFIGURAÇÕES ==========
+load_dotenv()
+app = FastAPI(title="Amazon Affiliate API", version="2.0")
+
+# Logs coloridos e organizados
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[RichHandler(rich_tracebacks=True)]
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("rich")
 
-app = FastAPI(title="Amazon Ofertas API", version="1.0")
+# ========== VARIÁVEIS ==========
+SCRAPEOPS_API_KEY = os.getenv("SCRAPEOPS_API_KEY")
+AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
 
-# 🔹 Simulação de produtos (você pode integrar futuramente com scraping ou API real)
-PRODUTOS = {
-    "notebook": [
-        {"titulo": "Notebook Acer Aspire 5", "preco": "R$ 2.999", "link": "https://amzn.to/3notebook"},
-        {"titulo": "Notebook Lenovo IdeaPad 3", "preco": "R$ 2.799", "link": "https://amzn.to/3lenovo"},
-    ],
-    "celular": [
-        {"titulo": "Samsung Galaxy S23", "preco": "R$ 3.999", "link": "https://amzn.to/3samsung"},
-        {"titulo": "iPhone 14", "preco": "R$ 5.499", "link": "https://amzn.to/3iphone"},
-    ],
-    "processador": [
-        {"titulo": "AMD Ryzen 5 5600X", "preco": "R$ 1.099", "link": "https://amzn.to/3ryzen"},
-        {"titulo": "Intel Core i7-13700K", "preco": "R$ 2.499", "link": "https://amzn.to/3intel"},
-    ],
-    "ferramenta": [
-        {"titulo": "Parafusadeira Bosch", "preco": "R$ 499", "link": "https://amzn.to/3bosch"},
-        {"titulo": "Furadeira DeWalt", "preco": "R$ 399", "link": "https://amzn.to/3dewalt"},
-    ],
-    "eletrodoméstico": [
-        {"titulo": "Geladeira Brastemp Frost Free", "preco": "R$ 3.199", "link": "https://amzn.to/3brastemp"},
-        {"titulo": "Micro-ondas Electrolux", "preco": "R$ 699", "link": "https://amzn.to/3micro"},
-    ],
-}
+if not SCRAPEOPS_API_KEY:
+    logger.error("❌ Variável SCRAPEOPS_API_KEY ausente! Configure-a no Railway.")
+else:
+    logger.info("✅ Proxy ScrapeOps configurado com sucesso.")
 
+# ========== ENDPOINT PRINCIPAL ==========
 @app.get("/buscar")
-def buscar_produto(q: str = Query(..., description="Categoria do produto")):
-    q = q.lower().strip()
-    logger.info(f"🔎 Buscando produto na categoria: {q}")
+async def buscar_produto(q: str = Query(..., description="Categoria ou termo para buscar na Amazon")):
+    """
+    Busca produtos na Amazon via ScrapeOps Proxy.
+    Exemplo: /buscar?q=notebook
+    """
+    amazon_url = f"https://www.amazon.com.br/s?k={q.replace(' ', '+')}&tag={AFFILIATE_TAG}"
+    proxy_url = "https://proxy.scrapeops.io/v1/"
+    params = {"api_key": SCRAPEOPS_API_KEY, "url": amazon_url}
 
-    if q not in PRODUTOS:
-        logger.warning(f"❌ Categoria '{q}' não encontrada")
-        return JSONResponse(
-            content={"status": "erro", "mensagem": f"Categoria '{q}' não encontrada."},
-            status_code=404,
-        )
+    logger.info(f"🔎 Buscando categoria: [bold cyan]{q}[/bold cyan]")
 
-    produto = random.choice(PRODUTOS[q])
-    logger.info(f"✅ Produto encontrado: {produto['titulo']}")
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(proxy_url, params=params, timeout=30) as resp:
+                logger.info(f"📡 Status ScrapeOps: {resp.status}")
+                if resp.status != 200:
+                    texto_erro = await resp.text()
+                    logger.error(f"⚠️ Falha HTTP {resp.status}: {texto_erro[:200]}")
+                    return {"status": "erro", "http": resp.status, "detalhe": texto_erro[:500]}
+                
+                html = await resp.text()
+                logger.success(f"✅ Resultado recebido para {q} (tamanho: {len(html)} bytes)")
+                return {"status": "ok", "categoria": q, "fonte": "Amazon via ScrapeOps", "html_preview": html[:800]}
+    except Exception as e:
+        logger.exception(f"💥 Erro inesperado ao buscar {q}: {e}")
+        return {"status": "erro", "mensagem": str(e)}
 
-    return JSONResponse(
-        content={
-            "status": "ok",
-            "categoria": q,
-            "produto": produto,
-        },
-        status_code=200,
-    )
+# ========== ROTA DE TESTE ==========
+@app.get("/")
+async def root():
+    return {"mensagem": "🚀 API Amazon Affiliate ativa e funcionando via ScrapeOps Proxy!"}

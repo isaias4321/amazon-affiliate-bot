@@ -20,9 +20,9 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', 'TOKEN_VAZIO')
 GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID', 'ID_VAZIO')
 
-# CORREÇÃO CRÍTICA: Definindo a Tag de Afiliado DIRETAMENTE no código
-# SUBSTITUA 'SUA_TAG_REAL_AQUI' pela sua tag de afiliado exata (ex: 'isaias06f-20')
-AFFILIATE_TAG = 'isaias06f-20' 
+# DEFINIÇÃO DA TAG DE AFILIADO NO CÓDIGO PARA GARANTIR A LEITURA CORRETA
+# ATENÇÃO: SUBSTITUA 'SUA_TAG_REAL_AQUI' pela sua tag de afiliado EXATA (ex: 'isaias06f-20')
+AFFILIATE_TAG = 'SUA_TAG_REAL_AQUI' 
 
 # Inicialização do bot
 if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == 'TOKEN_VAZIO':
@@ -33,43 +33,45 @@ bot = Bot(token=TELEGRAM_TOKEN)
 
 
 # -----------------------------------------------------
-# 3. Funções de Busca (SIMULAÇÃO CLÁSSICA)
+# 3. Funções de Busca (SIMULAÇÃO COM ASINs REAIS)
 # -----------------------------------------------------
 
 def buscar_ofertas_amazon():
     """
     SIMULA a busca por ofertas, focando apenas nos dados de texto.
-    Usa ASINs para garantir que o formato do link final seja sempre o mais limpo e seguro.
+    Usa ASINs de EXEMPLO REAIS para garantir que o link final funcione na Amazon BR.
     """
     
     logger.info("Executando a simulação de busca de ofertas na Amazon...")
     
-    # Mapeamento dos dados de simulação
+    # Mapeamento dos dados de simulação com ASINs de EXEMPLO REAIS da Amazon BR
     ofertas_simuladas = [
         {
-            # ASIN é o código único do produto Amazon. Use ASINs reais da Amazon BR para testar!
-            'asin': 'B09V74XXXX', 
-            'nome': 'NOTEBOOK GAMER: O Mais Potente da Amazon (40% OFF!)',
-            'preco_atual': 'R$ 4.299,00',
-            'preco_antigo': 'R$ 7.165,00',
+            # ASIN de Exemplo: Livro "O Poder do Hábito" (B0B13Q4W7P)
+            'asin': 'B0B13Q4W7P', 
+            'nome': 'Livro: O Poder do Hábito (40% OFF!)',
+            'preco_atual': 'R$ 49,90',
+            'preco_antigo': 'R$ 83,16',
             'desconto': '40%',
-            'categoria': 'Notebooks'
+            'categoria': 'Livros'
         },
         {
-            'asin': 'B08S3XXXX2A',
-            'nome': 'PROCESSADOR HIGH-END: Velocidade Máxima (30% de Desconto)',
-            'preco_atual': 'R$ 1.999,90',
-            'preco_antigo': 'R$ 2.857,00',
+            # ASIN de Exemplo: Fone de Ouvido Bluetooth (B07T2K9R1Z)
+            'asin': 'B07T2K9R1Z',
+            'nome': 'Fone de Ouvido Bluetooth TWS (30% de Desconto)',
+            'preco_atual': 'R$ 149,90',
+            'preco_antigo': 'R$ 214,14',
             'desconto': '30%',
-            'categoria': 'Peças de Computador'
+            'categoria': 'Eletrônicos'
         },
         {
-            'asin': 'B07YQXXXXXX',
-            'nome': 'Kit Chaves de Precisão para Reparos (25% OFF)',
-            'preco_atual': 'R$ 99,90',
-            'preco_antigo': 'R$ 133,20',
+            # ASIN de Exemplo: Cafeteira Expresso (B0B7F8JFXC)
+            'asin': 'B0B7F8JFXC',
+            'nome': 'Cafeteira Expresso Automática (25% OFF)',
+            'preco_atual': 'R$ 749,90',
+            'preco_antigo': 'R$ 999,87',
             'desconto': '25%',
-            'categoria': 'Ferramentas'
+            'categoria': 'Cozinha'
         }
     ]
     

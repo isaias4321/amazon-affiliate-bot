@@ -16,10 +16,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
-GROUP_CHAT_ID = os.getenv("GROUP_CHAT_ID", "")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+GROUP_ID = os.getenv("GROUP_ID", "")
 AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
-RAIN_API_KEY = os.getenv("RAIN_API_KEY", "")
+SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
 
 if not TELEGRAM_TOKEN or not GROUP_CHAT_ID or not RAIN_API_KEY:
     logger.error("❌ Variáveis de ambiente ausentes! Verifique TELEGRAM_TOKEN, GROUP_CHAT_ID e RAIN_API_KEY.")

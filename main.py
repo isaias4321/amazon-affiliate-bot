@@ -1,120 +1,119 @@
-from fastapi import FastAPI, Query
-import logging
 import os
-import aiohttp
 import asyncio
-from bs4 import BeautifulSoup
+import logging
+import aiohttp
+from telegram import Bot
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# -----------------------------------------------------
-# CONFIGURAÇÃO BÁSICA
-# -----------------------------------------------------
-app = FastAPI()
+# === CONFIGURAÇÕES ===
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A")
+AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
+GROUP_ID = int(os.getenv("GROUP_ID", "-4983279500"))
+RAIN_API_KEY = os.getenv("RAIN_API_KEY")  # <- Chave da Rainforest API
 
-logging.basicConfig(level=logging.INFO)
+CATEGORIAS = ["notebook", "processador", "celular", "ferramenta", "eletrodoméstico"]
+
+# === LOGGING ===
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Base da Amazon (.com evita erro 502 no Railway)
-AMAZON_BASE = "https://www.amazon.com/s"
-AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
+bot = Bot(token=BOT_TOKEN)
 
-CATEGORY_KEYWORDS = [
-    "notebook", "processador", "celular", "ferramenta", "eletrodoméstico",
-    "gamer", "monitor", "ssd", "mouse gamer", "placa de vídeo", "tv", "fone"
-]
-
-
-# -----------------------------------------------------
-# FUNÇÃO DE REQUISIÇÃO HTML (com headers realistas)
-# -----------------------------------------------------
-async def fetch_html(url: str) -> str:
-    """Faz requisição assíncrona com cabeçalhos realistas e tratamento de erro aprimorado"""
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://www.google.com/",
-        "Host": "www.amazon.com"
+# === FUNÇÃO PARA BUSCAR OFERTAS ===
+async def buscar_ofertas(session, categoria):
+    url = "https://api.rainforestapi.com/request"
+    params = {
+        "api_key": RAIN_API_KEY,
+        "type": "search",
+        "amazon_domain": "amazon.com.br",
+        "search_term": categoria,
     }
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                if resp.status != 200:
-                    logger.warning(f"⚠️ Erro HTTP {resp.status} ao acessar {url}")
-                    text = await resp.text()
-                    if "Bot Check" in text or "captcha" in text.lower():
-                        logger.warning("🚫 Amazon retornou CAPTCHA — bloqueio de bot detectado.")
-                    return ""
-                return await resp.text()
-    except asyncio.TimeoutError:
-        logger.error(f"⏱️ Timeout ao acessar {url}")
-        return ""
-    except aiohttp.ClientError as e:
-        logger.error(f"Erro de conexão ao acessar {url}: {e}")
-        return ""
+        async with session.get(url, params=params, timeout=30) as resp:
+            if resp.status != 200:
+                logger.warning(f"Erro HTTP {resp.status} ao buscar {categoria}")
+                return []
+
+            data = await resp.json()
+            produtos = []
+
+            for item in data.get("search_results", [])[:5]:
+                titulo = item.get("title")
+                preco = item.get("price", {}).get("raw", "Preço indisponível")
+                imagem = item.get("image")
+                link = item.get("link")
+
+                if not titulo or not link:
+                    continue
+
+                link_afiliado = f"{link}?tag={AFFILIATE_TAG}"
+                produtos.append({
+                    "titulo": titulo,
+                    "preco": preco,
+                    "imagem": imagem,
+                    "url": link_afiliado
+                })
+
+            return produtos
+
     except Exception as e:
-        logger.error(f"Erro inesperado em fetch_html({url}): {e}")
-        return ""
-
-
-# -----------------------------------------------------
-# ADICIONA TAG DE AFILIADO
-# -----------------------------------------------------
-def build_affiliate_link(url: str) -> str:
-    """Adiciona tag de afiliado à URL"""
-    sep = "&" if "?" in url else "?"
-    return f"{url}{sep}tag={AFFILIATE_TAG}"
-
-
-# -----------------------------------------------------
-# BUSCA PRODUTOS NA AMAZON (.com)
-# -----------------------------------------------------
-async def search_amazon_products(query: str, limit: int = 5):
-    """Busca produtos por termo na Amazon"""
-    search_url = f"{AMAZON_BASE}?k={query.replace(' ', '+')}"
-    html = await fetch_html(search_url)
-    if not html:
+        logger.error(f"Erro ao buscar {categoria}: {e}")
         return []
 
-    soup = BeautifulSoup(html, "html.parser")
-    items = soup.select("div.s-main-slot div.s-result-item[data-asin]")[:limit]
-    results = []
 
-    for item in items:
-        title_el = item.select_one("h2 a span")
-        link_el = item.select_one("h2 a")
-        price_el = item.select_one(".a-price-whole")
-        image_el = item.select_one("img.s-image")
+# === ENVIO DE OFERTAS ===
+async def enviar_ofertas():
+    logger.info("🔄 Iniciando ciclo de busca e envio de ofertas...")
 
-        if not title_el or not link_el:
-            continue
+    async with aiohttp.ClientSession() as session:
+        todas_ofertas = []
 
-        product = {
-            "title": title_el.text.strip(),
-            "url": build_affiliate_link("https://www.amazon.com" + link_el["href"].split("?")[0]),
-            "price": price_el.text.strip() if price_el else "N/A",
-            "image": image_el["src"] if image_el else "",
-        }
-        results.append(product)
+        for categoria in CATEGORIAS:
+            ofertas = await buscar_ofertas(session, categoria)
+            if ofertas:
+                todas_ofertas.extend(ofertas)
+            else:
+                logger.warning(f"Nenhuma oferta encontrada para {categoria}")
 
-    logger.info(f"🔍 Encontrados {len(results)} produtos para '{query}'")
-    return results
+        if not todas_ofertas:
+            logger.info("Nenhuma oferta encontrada neste ciclo.")
+            return
+
+        for oferta in todas_ofertas:
+            try:
+                msg = f"💥 <b>{oferta['titulo']}</b>\n💰 {oferta['preco']}\n🔗 <a href='{oferta['url']}'>Ver na Amazon</a>"
+                await bot.send_photo(
+                    chat_id=GROUP_ID,
+                    photo=oferta["imagem"],
+                    caption=msg,
+                    parse_mode="HTML"
+                )
+                await asyncio.sleep(3)
+            except Exception as e:
+                logger.error(f"Erro ao enviar oferta: {e}")
+
+    logger.info("✅ Ciclo de envio concluído.")
 
 
-# -----------------------------------------------------
-# ROTAS FASTAPI
-# -----------------------------------------------------
-@app.get("/")
-def root():
-    return {"message": "🚀 API Amazon Affiliate Bot rodando com sucesso!"}
+# === AGENDAMENTO ===
+async def job_busca_e_envio():
+    await enviar_ofertas()
 
 
-@app.get("/buscar")
-async def buscar_produtos(q: str = Query(..., description="Termo de busca na Amazon")):
-    produtos = await search_amazon_products(q)
-    return {"query": q, "count": len(produtos), "results": produtos}
+async def main():
+    logger.info("🤖 Bot de Ofertas Amazon iniciado com sucesso!")
+    logger.info(f"Tag de Afiliado: {AFFILIATE_TAG}")
+
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(job_busca_e_envio, "interval", minutes=60)
+    scheduler.start()
+
+    await enviar_ofertas()  # executa imediatamente
+
+    while True:
+        await asyncio.sleep(3600)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

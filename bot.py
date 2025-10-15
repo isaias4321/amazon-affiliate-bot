@@ -1,231 +1,143 @@
+import os
 import asyncio
 import logging
-import random
-import re
-import os
-from bs4 import BeautifulSoup
 import aiohttp
-from telegram import Bot, Update
-from telegram.ext import Application, CommandHandler, ContextTypes
-from telegram.error import InvalidToken, Forbidden
-# Se você estiver usando um arquivo .env localmente, use: from dotenv import load_dotenv
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
+from telegram.constants import ParseMode
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+)
+import nest_asyncio
 
-# Configuração de logs
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Corrige loop do asyncio no Railway
+nest_asyncio.apply()
+
+# ---------------- CONFIGURAÇÕES ----------------
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Seu token do BotFather
+GROUP_ID = os.getenv("GROUP_ID", "-4983279500")
+API_URL = "https://amazon-affiliate-bot-production.up.railway.app/buscar"
+SEARCH_TERMS = [
+    "notebook", "monitor", "mouse gamer", "cadeira gamer", "ssd", "tv", "fone bluetooth",
+    "geladeira", "ferramenta", "placa de vídeo", "processador", "fonte gamer"
+]
+INTERVAL_MIN = 1  # minutos
+
+# ---------------- LOGS ----------------
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# --- VARIÁVEIS DE AMBIENTE (OBRIGATÓRIO PARA DEPLOY NO RAILWAY) ---
-try:
-    # Remove os valores hardcoded para forçar o uso de variáveis de ambiente do Railway
-    BOT_TOKEN = os.getenv("BOT_TOKEN")
-    # O CHAT_ID deve ser um inteiro (incluindo o sinal de menos para grupos)
-    CHAT_ID = int(os.getenv("CHAT_ID"))
-    AFILIADO = os.getenv("AFILIADO_TAG")
-    INTERVALO_MINUTOS = int(os.getenv("INTERVALO_MINUTOS", 2)) 
 
-    if not all([BOT_TOKEN, CHAT_ID, AFILIADO]):
-         # Se faltar qualquer variável essencial, o script encerra e o erro aparece no log do Railway.
-         raise ValueError("As variáveis BOT_TOKEN, CHAT_ID e AFILIADO_TAG são obrigatórias.")
-         
-except (TypeError, ValueError) as e:
-    logger.error(f"ERRO DE CONFIGURAÇÃO CRÍTICO: Verifique as variáveis de ambiente no Railway: {e}")
-    exit(1)
-
-# ==========================
-# URLs de CATEGORIAS
-# ==========================
-URLS_CATEGORIAS = [
-    "https://www.amazon.com.br/gp/browse.html?node=16243862011",  # Eletrônicos
-    "https://www.amazon.com.br/gp/browse.html?node=16364755011",  # Games
-    "https://www.amazon.com.br/gp/browse.html?node=16243890011"    # Computadores
-]
-
-# ==========================
-# BUSCAR PRODUTOS COM DESCONTO (WEB SCRAPING)
-# ==========================
-async def buscar_produtos_com_desconto():
-    """Realiza web scraping nas URLs da Amazon para encontrar produtos em promoção."""
-    produtos = []
-    
-    # Adiciona timeout para evitar que o processo trave
-    timeout = aiohttp.ClientTimeout(total=20) 
-    
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        for url in URLS_CATEGORIAS:
-            try:
-                # Usa um User-Agent de navegador real para evitar bloqueio
-                async with session.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}) as response:
-                    if response.status != 200:
-                        logger.warning(f"Erro HTTP {response.status} ao acessar {url}. O scraping pode estar sendo bloqueado.")
-                        continue
-                    html = await response.text()
-                    # Usa 'lxml' que é mais rápido e robusto que 'html.parser'
-                    soup = BeautifulSoup(html, "lxml") 
-
-                    for produto in soup.select(".s-result-item"):
-                        # Seletores simplificados
-                        titulo_tag = produto.select_one("h2 a span")
-                        preco_tag = produto.select_one(".a-price-whole")
-                        link_tag = produto.select_one("h2 a")
-                        imagem_tag = produto.select_one("img")
-                        preco_antigo_tag = produto.select_one(".a-text-price span")
-
-                        if not (titulo_tag and preco_tag and link_tag):
-                            continue
-
-                        titulo = titulo_tag.text.strip()
-                        preco = preco_tag.text.strip()
-                        link = link_tag["href"]
-                        imagem_url = imagem_tag["src"] if imagem_tag else None
-
-                        # --- Lógica de Desconto ---
-                        desconto = None
-                        if preco_antigo_tag:
-                            try:
-                                # Converte o valor limpo com vírgula para ponto e depois para float
-                                preco_antigo_val = float(re.sub(r"[^\d,]", "", preco_antigo_tag.text).replace(',', '.'))
-                                preco_atual_val = float(re.sub(r"[^\d,]", "", preco).replace('.', '').replace(',', '.'))
-                                
-                                if preco_antigo_val > preco_atual_val:
-                                    desconto = int(100 - (preco_atual_val / preco_antigo_val * 100))
-                            except:
-                                logger.debug("Falha ao calcular desconto para um item.")
-                                pass
-
-                        # Só adiciona se tiver um desconto razoável (ex: 5% ou mais)
-                        if desconto and desconto >= 5:
-                            # Constrói o link final com a tag de afiliado
-                            final_link = f"https://www.amazon.com.br{link}?tag={AFILIADO}" if not link.startswith("http") else f"{link}?tag={AFILIADO}"
-
-                            produtos.append({
-                                "titulo": titulo,
-                                "preco": preco,
-                                "desconto": desconto,
-                                "link": final_link,
-                                "imagem": imagem_url
-                            })
-                            
-            except Exception as e:
-                logger.error(f"Erro fatal no scraping de {url}: {e}")
-
-    # Retorna uma lista de produtos únicos
-    return list({p['link']: p for p in produtos}.values())
-
-
-# ==========================
-# POSTAR NO TELEGRAM
-# ==========================
-async def postar_produto(bot: Bot, produto: dict):
-    """Formata e envia a mensagem da oferta para o Telegram."""
-    
-    # Limpeza básica do título para evitar erros de HTML/Markdown
-    titulo_limpo = produto['titulo'].replace('<', '&lt;').replace('>', '&gt;')
-
-    mensagem = (
-        f"🔥 <b>OFERTA!</b> -{produto['desconto']}% 🔥\n\n"
-        f"➡️ <b>{titulo_limpo}</b>\n"
-        f"💰 Por: R$ <b>{produto['preco']}</b>\n\n"
-        f"🛒 <a href='{produto['link']}'>COMPRE AGORA na Amazon!</a>"
-    )
-
+# ---------------- FUNÇÕES ----------------
+async def fetch_from_api(session, term: str):
+    """Busca produtos da sua API hospedada no Railway"""
     try:
-        if produto["imagem"]:
-            await bot.send_photo(
-                chat_id=CHAT_ID,
-                photo=produto["imagem"],
-                caption=mensagem,
-                parse_mode="HTML",
-            )
-        else:
-            await bot.send_message(
-                chat_id=CHAT_ID,
-                text=mensagem,
-                parse_mode="HTML",
-                disable_web_page_preview=False
-            )
-        logger.info(f"Produto postado: {produto['titulo']}")
-        
-    except Forbidden:
-        logger.error("Permissão negada (Forbidden). O bot é administrador do grupo?")
-    except InvalidToken:
-        logger.error("Token Inválido.")
+        async with session.get(API_URL, params={"q": term}) as resp:
+            if resp.status != 200:
+                logger.warning(f"Erro {resp.status} ao buscar {term}")
+                return []
+            data = await resp.json()
+            return data.get("results", [])
     except Exception as e:
-        logger.error(f"Erro ao postar produto: {e}")
+        logger.error(f"Erro ao buscar {term}: {e}")
+        return []
 
-# ==========================
-# LOOP AUTOMÁTICO (RODA EM BACKGROUND)
-# ==========================
-async def loop_postagens(context: ContextTypes.DEFAULT_TYPE):
-    """Job que roda a cada 'INTERVALO_MINUTOS' para buscar e postar ofertas."""
-    bot = context.bot
-    
-    logger.info("Iniciando ciclo de busca de ofertas...")
-    produtos = await buscar_produtos_com_desconto()
-    
+
+async def get_promotions():
+    """Busca múltiplas categorias de produtos"""
+    async with aiohttp.ClientSession() as session:
+        results = []
+        for term in SEARCH_TERMS:
+            produtos = await fetch_from_api(session, term)
+            results.extend(produtos)
+            await asyncio.sleep(1)  # evita flood
+        return results[:5]  # limita a 5 por rodada
+
+
+async def post_promotions(application_bot):
+    """Posta as ofertas automaticamente no grupo"""
+    produtos = await get_promotions()
     if not produtos:
-        logger.info("Nenhum produto com desconto encontrado neste ciclo.")
-    else:
-        # Posta um produto aleatório com desconto
-        produto = random.choice(produtos) 
-        await postar_produto(bot, produto)
-        
-    logger.info(f"Ciclo finalizado. Próximo ciclo em {INTERVALO_MINUTOS} minutos.")
+        logger.warning("Nenhum produto encontrado nesta rodada.")
+        return
 
-# ==========================
-# COMANDO /start_posting (opcional, para iniciar manualmente via Telegram)
-# ==========================
-async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Responde ao comando /start_posting e agenda o loop."""
-    
-    # Adiciona uma checagem de ID simples, se desejar que só o dono possa usar
-    # if update.message.chat_id != CHAT_ID:
-    #     await update.message.reply_text("Este comando só pode ser usado no chat configurado.")
-    #     return
-        
-    await update.message.reply_text(f"🚀 Loop de postagens agendado! Verificando a Amazon a cada {INTERVALO_MINUTOS} minutos.")
+    for p in produtos:
+        title = p.get("title", "Produto sem título")
+        price = p.get("price", "N/A")
+        image = p.get("image", "")
+        url = p.get("url", "")
 
-    # Agenda a tarefa de postagem (se não estiver agendada)
-    if not context.job_queue.get_jobs_by_name("auto_post_job"):
-        context.job_queue.run_repeating(
-            loop_postagens, 
-            interval=INTERVALO_MINUTOS * 60, # segundos
-            first=0, # Inicia imediatamente
-            name="auto_post_job"
-        )
-        logger.info("Tarefa de postagem agendada com sucesso.")
-    else:
-        await update.message.reply_text("O loop de postagens já está ativo.")
+        text = f"<b>{title}</b>\n💰 Preço: {price}\n\n<a href='{url}'>Ver na Amazon</a>"
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Ver oferta", url=url)]])
 
-# ==========================
-# MAIN
-# ==========================
+        try:
+            if image:
+                await application_bot.send_photo(
+                    chat_id=GROUP_ID,
+                    photo=image,
+                    caption=text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard,
+                )
+            else:
+                await application_bot.send_message(
+                    chat_id=GROUP_ID,
+                    text=text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard,
+                )
+            logger.info(f"✅ Produto postado: {title}")
+            await asyncio.sleep(3)
+        except Exception as e:
+            logger.error(f"Erro ao postar produto: {e}")
+
+
+# ---------------- COMANDOS TELEGRAM ----------------
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("✅ Bot ativo! Use /start_posting para começar as postagens automáticas.")
+
+
+async def cmd_start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    job_queue = context.job_queue
+    job_queue.run_repeating(postar_job, interval=INTERVAL_MIN * 60, first=5)
+    await update.message.reply_text(f"🤖 Postagens automáticas a cada {INTERVAL_MIN} minuto(s).")
+
+
+async def cmd_stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.job_queue.stop()
+    await update.message.reply_text("⛔ Postagens automáticas interrompidas.")
+
+
+async def cmd_postnow(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await post_promotions(context.application.bot)
+    await update.message.reply_text("📤 Postagem manual concluída!")
+
+
+# ---------------- JOB ----------------
+async def postar_job(context: ContextTypes.DEFAULT_TYPE):
+    await post_promotions(context.application.bot)
+
+
+# ---------------- EXECUÇÃO PRINCIPAL ----------------
 def main():
-    """Função principal que configura o bot."""
-    
-    logger.info("Iniciando aplicação do Telegram...")
-    try:
-        app = Application.builder().token(BOT_TOKEN).build()
-        
-        # Adiciona o handler para o comando de start manual
-        app.add_handler(CommandHandler("start_posting", start_posting))
-        
-        # Inicia a tarefa de postagem logo que o bot inicia
-        # O Job Queue usa o loop do Polling para rodar em intervalos
-        app.job_queue.run_repeating(
-            loop_postagens, 
-            interval=INTERVALO_MINUTOS * 60,
-            first=10, # 10 segundos após iniciar
-            name="auto_post_job"
-        )
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN não configurado nas variáveis de ambiente!")
 
-        logger.info("Bot configurado. Iniciando Polling (Loop infinito)...")
-        # O Polling mantém o processo do Railway vivo, escutando e executando jobs
-        app.run_polling(poll_interval=1) 
-        
-    except InvalidToken:
-        logger.error("Token de Bot Inválido. Verifique a variável BOT_TOKEN no Railway.")
-    except Exception as e:
-        logger.critical(f"Falha CRÍTICA ao iniciar o bot: {e}")
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("start_posting", cmd_start_posting))
+    app.add_handler(CommandHandler("stop_posting", cmd_stop_posting))
+    app.add_handler(CommandHandler("postnow", cmd_postnow))
+
+    logger.info("🚀 Bot iniciado e aguardando comandos...")
+    app.run_polling()
+
 
 if __name__ == "__main__":
     main()

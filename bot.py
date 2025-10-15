@@ -2,11 +2,9 @@ import os
 import time
 import requests
 import logging
-# Importação assíncrona necessária para rodar o agendador
 import asyncio 
 from telegram import Bot
 from telegram.constants import ParseMode 
-# Mudança para o agendador assíncrono para resolver o RuntimeWarning
 from apscheduler.schedulers.asyncio import AsyncIOScheduler 
 
 # -----------------------------------------------------
@@ -23,6 +21,7 @@ TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', 'TOKEN_VAZIO')
 GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID', 'ID_VAZIO')
 AFFILIATE_TAG = os.getenv('AFFILIATE_TAG', 'isaias06f-20')
 
+# Inicialização do bot
 if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == 'TOKEN_VAZIO':
     logger.error("ERRO: TELEGRAM_TOKEN não configurado. O bot não pode iniciar.")
     exit(1)
@@ -34,15 +33,16 @@ bot = Bot(token=TELEGRAM_TOKEN)
 # 3. Funções de Busca (SIMULAÇÃO)
 # -----------------------------------------------------
 
-# A função de busca permanece síncrona, pois só está simulando a lógica.
 def buscar_ofertas_amazon():
     """
-    SIMULA a busca por ofertas. SUBSTITUA ESTE CÓDIGO pela sua integração real com 
-    a Amazon PA API, usando as chaves secretas.
+    SIMULA a busca por ofertas nas categorias desejadas.
+    
+    ATENÇÃO: ESTE CÓDIGO DEVE SER SUBSTITUÍDO PELA INTEGRAÇÃO REAL COM A AMAZON PA API.
     """
     
     logger.info("Executando a simulação de busca de ofertas na Amazon...")
     
+    # Lista de ofertas simuladas
     ofertas_simuladas = [
         {
             'nome': 'NOTEBOOK GAMER: O Mais Potente da Amazon (40% OFF!)',
@@ -70,6 +70,7 @@ def buscar_ofertas_amazon():
         }
     ]
     
+    # Adicionando a Tag de Afiliado aos links
     for oferta in ofertas_simuladas:
         if '?' in oferta['link_original']:
             oferta['link_afiliado'] = f"{oferta['link_original']}&tag={AFFILIATE_TAG}"
@@ -78,12 +79,13 @@ def buscar_ofertas_amazon():
             
     return ofertas_simuladas
 
-# Tornamos a função assíncrona (async) e usamos await
+# Agora é uma função assíncrona (async def)
 async def enviar_oferta_telegram(oferta):
     """
     Formata e envia a mensagem de oferta para o grupo do Telegram de forma assíncrona.
     """
     
+    # Formatação do link para garantir que o bot envie o link e a foto (prévia).
     mensagem = (
         f"🔥 **OFERTA IMPERDÍVEL AMAZON ({oferta['categoria'].upper()})** 🔥\n\n"
         f"🛒 *{oferta['nome']}*\n\n"
@@ -94,11 +96,11 @@ async def enviar_oferta_telegram(oferta):
     )
     
     try:
-        # Usamos await na chamada de send_message para resolver o RuntimeWarning
-        await bot.send_message(
+        await bot.send_message( 
             chat_id=GROUP_CHAT_ID,
             text=mensagem,
             parse_mode=ParseMode.MARKDOWN,
+            # Mantém a prévia da página web (foto do produto) ativada
             disable_web_page_preview=False 
         )
         logger.info(f"Oferta enviada: {oferta['nome']}")
@@ -107,13 +109,12 @@ async def enviar_oferta_telegram(oferta):
 
 
 # -----------------------------------------------------
-# 4. Agendamento Principal (Scheduler)
+# 4. Agendamento Principal (Async Scheduler)
 # -----------------------------------------------------
 
-# Tornamos a função assíncrona (async) e usamos await
 async def job_busca_e_envio():
     """
-    Função chamada pelo agendador. Busca ofertas e as envia.
+    Função assíncrona chamada pelo agendador. Busca ofertas e as envia.
     """
     if GROUP_CHAT_ID == 'ID_VAZIO':
         logger.error("GROUP_CHAT_ID não configurado. Ignorando envio.")
@@ -121,51 +122,47 @@ async def job_busca_e_envio():
         
     logger.info("Iniciando ciclo de busca e envio de ofertas.")
     
-    ofertas = buscar_ofertas_amazon()
+    ofertas = buscar_ofertas_amazon() 
     
     if ofertas:
         logger.info(f"Encontradas {len(ofertas)} ofertas.")
         for oferta in ofertas:
-            await enviar_oferta_telegram(oferta)
-            # time.sleep() não deve ser usado em código assíncrono. Usamos asyncio.sleep.
+            await enviar_oferta_telegram(oferta) 
+            # Pausa assíncrona de 10 segundos entre cada envio de oferta no mesmo ciclo
             await asyncio.sleep(10) 
     else:
         logger.info("Nenhuma oferta significativa encontrada neste ciclo.")
 
-# Usamos async def no main para rodar o agendador assíncrono
 async def main():
     """
-    Configura o agendador e mantém o programa rodando de forma assíncrona.
+    Configura o agendador assíncrono e mantém o loop rodando.
     """
     logger.info("Bot de Ofertas Amazon (Railway) iniciando...")
+    logger.info(f"Tag de Afiliado: {AFFILIATE_TAG}")
     
-    # Cria o agendador assíncrono
-    scheduler = AsyncIOScheduler()
+    scheduler = AsyncIOScheduler() 
     
-    # Adiciona a tarefa: executa a função 'job_busca_e_envio' a cada 60 minutos
-    scheduler.add_job(job_busca_e_envio, 'interval', minutes=60)
+    # CORREÇÃO DE FREQUÊNCIA: Executa a cada 2 minutos
+    scheduler.add_job(job_busca_e_envio, 'interval', minutes=2)
     
     # Executa a primeira vez imediatamente
     await job_busca_e_envio()
     
-    # Inicia o agendador
     scheduler.start()
     
-    logger.info("Agendador iniciado. Próximo ciclo em 60 minutos.")
+    # LOG ATUALIZADO
+    logger.info("Agendador iniciado. Próximo ciclo em 2 minutos.")
 
-    # Loop para manter o worker rodando
+    # Mantém o loop assíncrono rodando infinitamente
     try:
-        # Roda o loop de eventos assíncronos
-        while True:
-            await asyncio.sleep(10)
+        await asyncio.Future()
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
         logger.info("Bot de Ofertas encerrado.")
 
 
 if __name__ == '__main__':
-    # Roda a função principal assíncrona
     try:
         asyncio.run(main())
     except Exception as e:
-        logger.error(f"Erro fatal ao iniciar o loop: {e}")
+        logger.error(f"Erro fatal ao iniciar o loop asyncio: {e}")

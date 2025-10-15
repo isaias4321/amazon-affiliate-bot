@@ -1,106 +1,62 @@
-import os
-import random
 import asyncio
-import logging
 import aiohttp
-from fastapi import FastAPI, Query
+import logging
+import os
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Bot
-from telegram.constants import ParseMode
-import uvicorn
+from dotenv import load_dotenv
+from colorama import Fore, Style, init
 
-# 🔧 Configurações e logs
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+init(autoreset=True)
+load_dotenv()
+
+# Configurações principais
+API_URL = "https://amazon-affiliate-bot-production.up.railway.app/buscar"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+GROUP_ID = -4983279500
+AFFILIATE_TAG = "isaias06f-20"
+
+bot = Bot(token=TELEGRAM_TOKEN)
+scheduler = AsyncIOScheduler()
+
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 🔐 Variáveis de ambiente
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GROUP_ID = os.getenv("GROUP_ID")
-AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "seu-tag-aqui")
+CATEGORIAS = ["notebook", "processador", "celular", "ferramenta", "eletrodoméstico"]
 
-# 🧠 Inicializa API e bot
-app = FastAPI()
-bot = Bot(token=BOT_TOKEN)
-
-# ------------------------------------------------------------------
-# 🔹 API ENDPOINT
-# ------------------------------------------------------------------
-@app.get("/")
-def home():
-    return {"status": "online", "message": "🚀 API e Bot Amazon Affiliate estão ativos!"}
-
-@app.get("/buscar")
-def buscar(q: str = Query(..., description="Categoria de produto")):
-    produtos_exemplo = [
-        {
-            "titulo": f"{q.title()} Ultra 2025",
-            "preco": "R$ 2.499,00",
-            "link": f"https://www.amazon.com.br/s?k={q.replace(' ', '+')}&tag={AFFILIATE_TAG}",
-            "imagem": "https://m.media-amazon.com/images/I/71KZfQA-Y7L._AC_SL1500_.jpg",
-        },
-        {
-            "titulo": f"{q.title()} Max Performance",
-            "preco": "R$ 3.299,00",
-            "link": f"https://www.amazon.com.br/s?k={q.replace(' ', '+')}&tag={AFFILIATE_TAG}",
-            "imagem": "https://m.media-amazon.com/images/I/81QpkIctqPL._AC_SL1500_.jpg",
-        },
-    ]
-    return random.choice(produtos_exemplo)
-
-# ------------------------------------------------------------------
-# 🔹 Lógica do bot
-# ------------------------------------------------------------------
-async def buscar_produto(categoria: str):
-    """Busca 1 produto da categoria via API local."""
-    url = f"http://localhost:8000/buscar?q={categoria}"
+async def buscar_ofertas():
+    logger.info(f"{Fore.CYAN}🔄 Iniciando ciclo de busca e envio de ofertas...")
     async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(url, timeout=20) as resp:
-                if resp.status != 200:
-                    logger.warning(f"⚠️ Erro HTTP {resp.status} ao buscar {categoria}")
-                    return None
-                return await resp.json()
-        except Exception as e:
-            logger.error(f"Erro ao buscar {categoria}: {e}")
-            return None
+        for categoria in CATEGORIAS:
+            try:
+                async with session.post(API_URL, json={"categoria": categoria}) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if "erro" in data:
+                            logger.warning(f"{Fore.YELLOW}⚠️ Nenhuma oferta encontrada para {categoria}")
+                            continue
+                        oferta = data["oferta"]
+                        mensagem = (
+                            f"🔥 {oferta['titulo']}\n"
+                            f"💰 Preço: {oferta['preco']}\n"
+                            f"🔗 [Compre aqui]({oferta['link']}?tag={AFFILIATE_TAG})"
+                        )
+                        await bot.send_message(chat_id=GROUP_ID, text=mensagem, parse_mode="Markdown")
+                        logger.info(f"{Fore.GREEN}✅ Oferta enviada: {categoria}")
+                    else:
+                        logger.warning(f"{Fore.RED}⚠️ Erro HTTP {resp.status} ao buscar {categoria}")
+            except Exception as e:
+                logger.error(f"{Fore.RED}❌ Erro ao buscar {categoria}: {e}")
+    logger.info(f"{Fore.MAGENTA}✅ Ciclo concluído!{Style.RESET_ALL}")
 
-async def enviar_oferta(produto, categoria):
-    if not produto:
-        return
-    msg = (
-        f"🛒 <b>{produto['titulo']}</b>\n"
-        f"💰 {produto['preco']}\n"
-        f"🔗 <a href='{produto['link']}'>Ver oferta na Amazon</a>\n"
-        f"🏷️ Categoria: {categoria}"
-    )
-    await bot.send_message(chat_id=GROUP_ID, text=msg, parse_mode=ParseMode.HTML)
-
-async def job_busca_envio():
-    categorias = ["notebook", "processador", "celular", "ferramenta", "eletrodoméstico"]
-    for categoria in categorias:
-        produto = await buscar_produto(categoria)
-        await enviar_oferta(produto, categoria)
-    logger.info("✅ Ciclo concluído!")
-
-async def iniciar_bot():
-    logger.info("🤖 Bot de Ofertas Amazon iniciado com sucesso!")
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(job_busca_envio, "interval", minutes=10)
+async def main():
+    logger.info(f"{Fore.GREEN}🤖 Bot de Ofertas Amazon iniciado com sucesso!")
+    logger.info(f"{Fore.BLUE}📡 API em uso: {API_URL}")
+    scheduler.add_job(buscar_ofertas, "interval", minutes=15)
     scheduler.start()
-    await job_busca_envio()
+    await buscar_ofertas()  # Executa uma vez ao iniciar
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(3600)
 
-# ------------------------------------------------------------------
-# 🔹 Inicialização unificada
-# ------------------------------------------------------------------
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-
-    async def main():
-        asyncio.create_task(iniciar_bot())
-        config = uvicorn.Config(app=app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
-        server = uvicorn.Server(config)
-        await server.serve()
-
-    loop.run_until_complete(main())
+    asyncio.run(main())

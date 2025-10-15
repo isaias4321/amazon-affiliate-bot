@@ -30,49 +30,50 @@ bot = Bot(token=TELEGRAM_TOKEN)
 
 
 # -----------------------------------------------------
-# 3. Funções de Busca (SIMULAÇÃO CLÁSSICA)
+# 3. Funções de Busca (SIMULAÇÃO CLÁSSICA) - CORRIGIDA AQUI
 # -----------------------------------------------------
 
 def buscar_ofertas_amazon():
     """
     SIMULA a busca por ofertas, focando apenas nos dados de texto.
+    Usa ASINs para garantir que o formato do link final seja sempre o mais limpo e seguro.
     """
     
     logger.info("Executando a simulação de busca de ofertas na Amazon...")
     
+    # Mapeamento dos dados de simulação
     ofertas_simuladas = [
         {
+            # ASIN é o código único do produto Amazon, é tudo que precisamos para o link
+            # Use um ASIN de 10 dígitos que você tenha certeza que existe na Amazon BR para testar!
+            'asin': 'B09V74XXXX', 
             'nome': 'NOTEBOOK GAMER: O Mais Potente da Amazon (40% OFF!)',
             'preco_atual': 'R$ 4.299,00',
             'preco_antigo': 'R$ 7.165,00',
             'desconto': '40%',
-            'link_original': 'https://www.amazon.com.br/dp/B09V74XXXX', 
             'categoria': 'Notebooks'
         },
         {
+            'asin': 'B08S3XXXX2A',
             'nome': 'PROCESSADOR HIGH-END: Velocidade Máxima (30% de Desconto)',
             'preco_atual': 'R$ 1.999,90',
             'preco_antigo': 'R$ 2.857,00',
             'desconto': '30%',
-            'link_original': 'https://www.amazon.com.br/dp/B08S3XXXX2A',
             'categoria': 'Peças de Computador'
         },
         {
+            'asin': 'B07YQXXXXXX',
             'nome': 'Kit Chaves de Precisão para Reparos (25% OFF)',
             'preco_atual': 'R$ 99,90',
             'preco_antigo': 'R$ 133,20',
             'desconto': '25%',
-            'link_original': 'https://www.amazon.com.br/dp/B07YQXXXXXX',
             'categoria': 'Ferramentas'
         }
     ]
     
-    # Adicionando a Tag de Afiliado aos links
+    # Construímos o link no formato mais seguro: https://www.amazon.com.br/dp/ASIN?tag=SUATAG
     for oferta in ofertas_simuladas:
-        if '?' in oferta['link_original']:
-            oferta['link_afiliado'] = f"{oferta['link_original']}&tag={AFFILIATE_TAG}"
-        else:
-            oferta['link_afiliado'] = f"{oferta['link_original']}?tag={AFFILIATE_TAG}"
+        oferta['link_afiliado'] = f"https://www.amazon.com.br/dp/{oferta['asin']}?tag={AFFILIATE_TAG}"
             
     return ofertas_simuladas
 

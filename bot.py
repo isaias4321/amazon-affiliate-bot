@@ -1,114 +1,166 @@
-import asyncio
-import aiohttp
-import logging
 import os
-import nest_asyncio
-from fastapi import FastAPI
-from telegram import Bot, Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-import uvicorn
+import time
+import requests
+import logging
+from telegram import Bot, ParseMode
+from apscheduler.schedulers.background import BackgroundScheduler
 
-# ======================================================
-# CONFIGURAÇÕES
-# ======================================================
-logging.basicConfig(level=logging.INFO)
+# -----------------------------------------------------
+# 1. Configuração do Logging
+# -----------------------------------------------------
+# Configura o log para exibir informações de tempo e nível
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-nest_asyncio.apply()
+# -----------------------------------------------------
+# 2. Variáveis de Ambiente (Railway)
+# -----------------------------------------------------
+# O bot.py irá buscar estas variáveis que você configurou no painel do Railway.
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A')
+GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID', '-4983279500')
+AFFILIATE_TAG = os.getenv('AFFILIATE_TAG', 'isaias06f-20')
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GROUP_ID = os.getenv("GROUP_ID")
-API_URL = "https://amazon-affiliate-bot-production.up.railway.app/api/search"
+# OBS: As chaves da Amazon PA API (ACCESS_KEY e SECRET_KEY) deveriam ser
+# carregadas aqui, mas estamos usando dados simulados.
+# PAAPI_ACCESS_KEY = os.getenv('PAAPI_ACCESS_KEY')
+# PAAPI_SECRET_KEY = os.getenv('PAAPI_SECRET_KEY')
 
-if not BOT_TOKEN or not GROUP_ID:
-    raise ValueError("❌ BOT_TOKEN e GROUP_ID são obrigatórios.")
+# Inicialização do bot
+bot = Bot(token=TELEGRAM_TOKEN)
 
-bot = Bot(token=BOT_TOKEN)
-app = FastAPI()
 
-# ======================================================
-# FUNÇÕES DE PRODUTOS E POSTAGEM
-# ======================================================
-async def buscar_produtos():
-    termos = ["notebook", "monitor", "cadeira gamer", "mouse", "pc gamer"]
-    produtos = []
+# -----------------------------------------------------
+# 3. Funções de Busca (SIMULAÇÃO)
+# -----------------------------------------------------
 
-    async with aiohttp.ClientSession() as session:
-        for termo in termos:
-            try:
-                async with session.get(f"{API_URL}?q={termo}") as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        produtos.extend(data.get("produtos", []))
-            except Exception as e:
-                logger.error(f"Erro ao buscar '{termo}': {e}")
+# A função abaixo SIMULA a busca e geração de ofertas.
+# VOCÊ DEVE SUBSTITUÍ-LA PELA INTEGRAÇÃO REAL COM A AMAZON PA API.
+def buscar_ofertas_amazon():
+    """
+    SIMULA a busca por ofertas nas categorias desejadas.
+    Esta função DEVE ser substituída pela integração real com a Amazon PA API.
+    A integração real precisa:
+    1. Usar as chaves PAAPI_ACCESS_KEY e PAAPI_SECRET_KEY.
+    2. Filtrar produtos das categorias (Ferramentas, PC, Notebook, Celular, Eletrodoméstico).
+    3. Garantir que o link gerado contenha o AFFILIATE_TAG.
+    """
+    
+    logger.info("Executando a simulação de busca de ofertas na Amazon...")
+    
+    # Lista de ofertas simuladas que seriam retornadas pela PA API
+    ofertas_simuladas = [
+        {
+            'nome': 'Notebook Gamer Ultra Rápido (40% OFF!)',
+            'preco_atual': 'R$ 4.299,00',
+            'preco_antigo': 'R$ 7.165,00',
+            'desconto': '40%',
+            'link_original': 'https://www.amazon.com.br/dp/B09V74XXXX', # ASIN de exemplo
+            'categoria': 'Notebooks'
+        },
+        {
+            'nome': 'Processador High-End (30% de Desconto)',
+            'preco_atual': 'R$ 1.999,90',
+            'preco_antigo': 'R$ 2.857,00',
+            'desconto': '30%',
+            'link_original': 'https://www.amazon.com.br/dp/B08S3XXX2A', # ASIN de exemplo
+            'categoria': 'Peças de Computador'
+        }
+        # Adicione mais ofertas simuladas aqui
+    ]
+    
+    # Adicionando a Tag de Afiliado aos links
+    for oferta in ofertas_simuladas:
+        # Cria o link de afiliado final com a tag
+        if '?' in oferta['link_original']:
+            oferta['link_afiliado'] = f"{oferta['link_original']}&tag={AFFILIATE_TAG}"
+        else:
+            oferta['link_afiliado'] = f"{oferta['link_original']}?tag={AFFILIATE_TAG}"
+            
+    # Na simulação, vamos retornar apenas uma oferta a cada ciclo
+    if time.time() % 2 == 0:
+        return ofertas_simuladas
+    else:
+        return []
 
-    return produtos
+def enviar_oferta_telegram(oferta):
+    """
+    Formata e envia a mensagem de oferta para o grupo do Telegram.
+    """
+    
+    mensagem = (
+        f"🔥 **OFERTA QUENTE AMAZON - {oferta['categoria'].upper()}** 🔥\n\n"
+        f"🛒 *{oferta['nome']}*\n\n"
+        f"🏷️ De: ~{oferta['preco_antigo']}~\n"
+        f"✅ **Por Apenas: {oferta['preco_atual']}**\n"
+        f"💥 *Economize {oferta['desconto']}!* \n\n"
+        f"➡️ [CLIQUE AQUI PARA GARANTIR! (Afiliado)]( {oferta['link_afiliado']} )"
+    )
+    
+    try:
+        # Tenta enviar a mensagem para o grupo
+        bot.send_message(
+            chat_id=GROUP_CHAT_ID,
+            text=mensagem,
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=False # Permite a prévia da imagem/link da Amazon
+        )
+        logger.info(f"Oferta enviada: {oferta['nome']}")
+    except Exception as e:
+        logger.error(f"Erro ao enviar mensagem para o grupo {GROUP_CHAT_ID}: {e}")
+        # Uma causa comum é o bot não ser administrador no grupo/canal.
 
-async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE = None):
-    produtos = await buscar_produtos()
-    if not produtos:
-        logger.info("Nenhum produto encontrado nesta busca.")
-        return
 
-    for p in produtos[:5]:
-        nome = p.get("titulo", "Produto sem nome")
-        preco = p.get("preco", "Preço indisponível")
-        imagem = p.get("imagem")
-        link = p.get("link")
-        legenda = f"💥 *{nome}*\n💰 *Preço:* {preco}\n🔗 [Compre agora]({link})"
+# -----------------------------------------------------
+# 4. Agendamento Principal (Scheduler)
+# -----------------------------------------------------
 
-        try:
-            if imagem:
-                await bot.send_photo(GROUP_ID, photo=imagem, caption=legenda, parse_mode="Markdown")
-            else:
-                await bot.send_message(GROUP_ID, text=legenda, parse_mode="Markdown")
-            await asyncio.sleep(3)
-        except Exception as e:
-            logger.error(f"Erro ao enviar produto: {e}")
+def job_busca_e_envio():
+    """
+    Função chamada pelo agendador. Busca ofertas e as envia.
+    """
+    logger.info("Iniciando ciclo de busca e envio de ofertas.")
+    
+    ofertas = buscar_ofertas_amazon()
+    
+    if ofertas:
+        for oferta in ofertas:
+            enviar_oferta_telegram(oferta)
+            # Pausa entre os envios para evitar spam e limites de taxa do Telegram
+            time.sleep(5) 
+    else:
+        logger.info("Nenhuma oferta significativa encontrada neste ciclo.")
 
-# ======================================================
-# COMANDOS DO BOT
-# ======================================================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Bot ativo! Enviando ofertas automáticas a cada 1 minuto.")
-    context.job_queue.run_repeating(postar_ofertas, interval=60, first=5)
+def main():
+    """
+    Configura o agendador e mantém o programa rodando.
+    """
+    logger.info("Bot de Ofertas Amazon (Railway) iniciado.")
+    logger.info(f"Target Group ID: {GROUP_CHAT_ID}")
+    
+    # Cria o agendador
+    scheduler = BackgroundScheduler()
+    
+    # Adiciona a tarefa: executa a função 'job_busca_e_envio' a cada 30 minutos
+    # Altere 'minutes=30' para o intervalo desejado (ex: hours=1)
+    scheduler.add_job(job_busca_e_envio, 'interval', minutes=30)
+    
+    # Inicia o agendador
+    scheduler.start()
+    
+    logger.info("Agendador iniciado. Próximo ciclo em 30 minutos.")
 
-# ======================================================
-# INICIAR BOT EM BACKGROUND
-# ======================================================
-async def iniciar_bot():
-    app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
-    app_bot.add_handler(CommandHandler("start", start))
-    job = app_bot.job_queue
-    job.run_repeating(postar_ofertas, interval=60, first=10)
+    # Loop infinito para manter o bot rodando no Railway
+    try:
+        while True:
+            time.sleep(1)
+    except (KeyboardInterrupt, SystemExit):
+        # Desliga o agendador de forma limpa
+        scheduler.shutdown()
+        logger.info("Bot de Ofertas encerrado.")
 
-    logger.info("🤖 Bot Telegram iniciado com sucesso.")
-    await app_bot.run_polling()
 
-# ======================================================
-# ENDPOINTS FASTAPI
-# ======================================================
-@app.get("/")
-async def root():
-    return {"status": "ok", "mensagem": "🚀 API e Bot de ofertas rodando no Railway!"}
-
-@app.get("/force")
-async def force_post():
-    await postar_ofertas()
-    return {"status": "ok", "mensagem": "📤 Ofertas enviadas manualmente."}
-
-# ======================================================
-# EXECUÇÃO PRINCIPAL
-# ======================================================
-if __name__ == "__main__":
-    async def main():
-        # Inicia o bot em paralelo
-        asyncio.create_task(iniciar_bot())
-
-        # Roda o servidor FastAPI
-        config = uvicorn.Config(app, host="0.0.0.0", port=8080, log_level="info")
-        server = uvicorn.Server(config)
-        await server.serve()
-
-    asyncio.run(main())
+if __name__ == '__main__':
+    # Pequena pausa para garantir que o Railway inicialize
+    time.sleep(10)
+    main()

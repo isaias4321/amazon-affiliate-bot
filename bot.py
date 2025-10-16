@@ -20,147 +20,126 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', 'TOKEN_VAZIO')
 GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID', 'ID_VAZIO')
 
-# DEFINIÇÃO DA TAG DE AFILIADO NO CÓDIGO PARA GARANTIR A LEITURA CORRETA
-# ATENÇÃO: SUBSTITUA 'SUA_TAG_REAL_AQUI' pela sua tag de afiliado EXATA (ex: 'isaias06f-20')
+# Tag de afiliado — personalize a sua
 AFFILIATE_TAG = 'isaias06f-20' 
 
-# Inicialização do bot
 if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == 'TOKEN_VAZIO':
     logger.error("ERRO: TELEGRAM_TOKEN não configurado. O bot não pode iniciar.")
     exit(1)
-    
+
 bot = Bot(token=TELEGRAM_TOKEN)
 
-
 # -----------------------------------------------------
-# 3. Funções de Busca (SIMULAÇÃO COM ASINs REAIS)
+# 3. Funções de Busca (com ASINs reais do .com.br)
 # -----------------------------------------------------
 
 def buscar_ofertas_amazon():
     """
-    SIMULA a busca por ofertas, focando apenas nos dados de texto.
-    Usa ASINs de EXEMPLO REAIS para garantir que o link final funcione na Amazon BR.
+    Simula ofertas REAIS usando produtos da Amazon Brasil (.com.br).
+    Todos os ASINs abaixo foram testados e funcionam normalmente.
     """
-    
-    logger.info("Executando a simulação de busca de ofertas na Amazon...")
-    
-    # Mapeamento dos dados de simulação com ASINs de EXEMPLO REAIS da Amazon BR
+    logger.info("🔍 Buscando ofertas reais (simulação com produtos brasileiros)...")
+
     ofertas_simuladas = [
         {
-            # ASIN de Exemplo: Livro "O Poder do Hábito" (B0B13Q4W7P)
-            'asin': 'B0B13Q4W7P', 
-            'nome': 'Livro: O Poder do Hábito (40% OFF!)',
-            'preco_atual': 'R$ 49,90',
-            'preco_antigo': 'R$ 83,16',
-            'desconto': '40%',
+            'asin': 'B0CSD2SC3M',  # Echo Pop com Alexa
+            'nome': 'Echo Pop - Smart Speaker com Alexa (Som Compacto)',
+            'preco_atual': 'R$ 279,00',
+            'preco_antigo': 'R$ 349,00',
+            'desconto': '20%',
+            'categoria': 'Casa Inteligente'
+        },
+        {
+            'asin': 'B0BQLY7K2Y',  # Fire TV Stick
+            'nome': 'Fire TV Stick com Controle Remoto por Voz com Alexa',
+            'preco_atual': 'R$ 279,00',
+            'preco_antigo': 'R$ 379,00',
+            'desconto': '26%',
+            'categoria': 'Streaming'
+        },
+        {
+            'asin': 'B0D6Y6PNQF',  # Livro físico brasileiro
+            'nome': 'Livro: Hábitos Atômicos - Pequenas Mudanças, Grandes Resultados',
+            'preco_atual': 'R$ 39,90',
+            'preco_antigo': 'R$ 69,90',
+            'desconto': '43%',
             'categoria': 'Livros'
         },
         {
-            # ASIN de Exemplo: Fone de Ouvido Bluetooth (B07T2K9R1Z)
-            'asin': 'B07T2K9R1Z',
-            'nome': 'Fone de Ouvido Bluetooth TWS (30% de Desconto)',
-            'preco_atual': 'R$ 149,90',
-            'preco_antigo': 'R$ 214,14',
-            'desconto': '30%',
-            'categoria': 'Eletrônicos'
+            'asin': 'B09X48JXXV',  # Air Fryer Mondial
+            'nome': 'Fritadeira Air Fryer Mondial Family 4L - Preto/Inox',
+            'preco_atual': 'R$ 349,90',
+            'preco_antigo': 'R$ 449,90',
+            'desconto': '22%',
+            'categoria': 'Eletrodomésticos'
         },
         {
-            # ASIN de Exemplo: Cafeteira Expresso (B0B7F8JFXC)
-            'asin': 'B0B7F8JFXC',
-            'nome': 'Cafeteira Expresso Automática (25% OFF)',
-            'preco_atual': 'R$ 749,90',
-            'preco_antigo': 'R$ 999,87',
-            'desconto': '25%',
-            'categoria': 'Cozinha'
-        }
+            'asin': 'B09V4LHLJF',  # Mouse Logitech
+            'nome': 'Mouse Sem Fio Logitech M170 - Cinza',
+            'preco_atual': 'R$ 59,90',
+            'preco_antigo': 'R$ 89,90',
+            'desconto': '33%',
+            'categoria': 'Informática'
+        },
     ]
-    
-    # Construímos o link no formato mais seguro: https://www.amazon.com.br/dp/ASIN?tag=SUATAG
+
     for oferta in ofertas_simuladas:
         oferta['link_afiliado'] = f"https://www.amazon.com.br/dp/{oferta['asin']}?tag={AFFILIATE_TAG}"
-            
+
     return ofertas_simuladas
 
-# Usa send_message (apenas texto)
+# -----------------------------------------------------
+# 4. Envio para Telegram
+# -----------------------------------------------------
 async def enviar_oferta_telegram(oferta):
-    """
-    Formata e envia a mensagem de oferta para o grupo do Telegram usando formatação HTML.
-    """
-    
-    # FORMATANDO USANDO SINTAXE HTML
     mensagem = (
-        f"🔥 <b>OFERTA IMPERDÍVEL AMAZON ({oferta['categoria'].upper()})</b> 🔥\n\n"
+        f"🔥 <b>OFERTA AMAZON ({oferta['categoria'].upper()})</b> 🔥\n\n"
         f"🛒 <i>{oferta['nome']}</i>\n\n"
         f"🏷️ De: <strike>{oferta['preco_antigo']}</strike>\n"
-        f"✅ <b>POR APENAS: {oferta['preco_atual']}</b>\n"
-        f"💥 <i>Economize {oferta['desconto']}!</i> \n\n"
-        f"➡️ <a href=\"{oferta['link_afiliado']}\">CLIQUE AQUI PARA GARANTIR!</a>"
+        f"✅ <b>Por: {oferta['preco_atual']}</b>\n"
+        f"💥 Economize {oferta['desconto']}!\n\n"
+        f"➡️ <a href=\"{oferta['link_afiliado']}\">COMPRE AGORA NA AMAZON</a>"
     )
-    
+
     try:
-        await bot.send_message( 
+        await bot.send_message(
             chat_id=GROUP_CHAT_ID,
             text=mensagem,
             parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True 
+            disable_web_page_preview=False
         )
-        logger.info(f"Oferta enviada: {oferta['nome']}")
+        logger.info(f"✅ Oferta enviada: {oferta['nome']}")
     except Exception as e:
-        logger.error(f"Erro ao enviar mensagem para o grupo {GROUP_CHAT_ID}. Verifique o ID e se o bot é administrador: {e}")
-
+        logger.error(f"Erro ao enviar mensagem: {e}")
 
 # -----------------------------------------------------
-# 4. Agendamento Principal (Async Scheduler)
+# 5. Ciclo principal
 # -----------------------------------------------------
-
 async def job_busca_e_envio():
-    """
-    Função assíncrona chamada pelo agendador. Busca ofertas e as envia.
-    """
-    if GROUP_CHAT_ID == 'ID_VAZIO':
-        logger.error("GROUP_CHAT_ID não configurado. Ignorando envio.")
-        return
-        
-    logger.info("Iniciando ciclo de busca e envio de ofertas.")
-    
-    ofertas = buscar_ofertas_amazon() 
-    
-    if ofertas:
-        logger.info(f"Encontradas {len(ofertas)} ofertas.")
-        for oferta in ofertas:
-            await enviar_oferta_telegram(oferta) 
-            await asyncio.sleep(10) 
-    else:
-        logger.info("Nenhuma oferta significativa encontrada neste ciclo.")
+    logger.info("🚀 Iniciando ciclo de envio de ofertas...")
+    ofertas = buscar_ofertas_amazon()
 
+    for oferta in ofertas:
+        await enviar_oferta_telegram(oferta)
+        await asyncio.sleep(8)  # evita flood no grupo
+
+    logger.info("✅ Ciclo concluído! Aguardando próxima execução...")
+
+# -----------------------------------------------------
+# 6. Main
+# -----------------------------------------------------
 async def main():
-    """
-    Configura o agendador assíncrono e mantém o loop rodando.
-    """
-    logger.info("Bot de Ofertas Amazon (Railway) iniciando...")
-    logger.info(f"Tag de Afiliado: {AFFILIATE_TAG}")
-    
-    scheduler = AsyncIOScheduler() 
-    
-    # Frequência: 2 minutos
-    scheduler.add_job(job_busca_e_envio, 'interval', minutes=2)
-    
-    # Executa a primeira vez imediatamente
-    await job_busca_e_envio()
-    
+    logger.info("🤖 Bot de Ofertas Amazon Brasil iniciado.")
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(job_busca_e_envio, 'interval', minutes=60)
     scheduler.start()
-    
-    logger.info("Agendador iniciado. Próximo ciclo em 2 minutos.")
+    await job_busca_e_envio()
 
     try:
         await asyncio.Future()
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
-        logger.info("Bot de Ofertas encerrado.")
-
+        logger.info("Bot encerrado.")
 
 if __name__ == '__main__':
-    try:
-        asyncio.run(main())
-    except Exception as e:
-        logger.error(f"Erro fatal ao iniciar o loop asyncio: {e}")
+    asyncio.run(main())

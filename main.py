@@ -9,7 +9,7 @@ from telegram.constants import ParseMode
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # -----------------------------------------------------
-# 1️⃣ CONFIGURAÇÃO DE LOGS COLORIDOS
+# 1️⃣ LOGS COLORIDOS E FORMATADOS
 # -----------------------------------------------------
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -32,7 +32,7 @@ if not TELEGRAM_TOKEN or not GROUP_ID:
 bot = Bot(token=TELEGRAM_TOKEN)
 
 # -----------------------------------------------------
-# 3️⃣ FUNÇÃO DE RASPAGEM COM SCRAPEOPS
+# 3️⃣ FUNÇÃO DE RASPAGEM (SCRAPEOPS)
 # -----------------------------------------------------
 def buscar_html_amazon(query: str) -> str | None:
     """
@@ -40,9 +40,8 @@ def buscar_html_amazon(query: str) -> str | None:
     Retorna o HTML da página de busca.
     """
     url_base = "https://www.amazon.com.br/s"
-    params = {"k": query}
-
     proxy_url = "https://proxy.scrapeops.io/v1/"
+
     try:
         resp = requests.get(
             proxy_url,
@@ -50,7 +49,7 @@ def buscar_html_amazon(query: str) -> str | None:
                 "api_key": SCRAPEOPS_API_KEY,
                 "url": f"{url_base}?k={query}",
             },
-            timeout=20
+            timeout=25
         )
 
         if resp.status_code == 200:
@@ -59,35 +58,43 @@ def buscar_html_amazon(query: str) -> str | None:
         else:
             logger.warning(f"⚠️ Erro HTTP {resp.status_code} ao buscar '{query}'")
             return None
+
     except Exception as e:
         logger.error(f"❌ Erro ScrapeOps '{query}': {e}")
         return None
 
 # -----------------------------------------------------
-# 4️⃣ EXTRAÇÃO DE OFERTAS REAIS
+# 4️⃣ EXTRAÇÃO DE OFERTAS REAIS COM DESCONTO
 # -----------------------------------------------------
 def extrair_ofertas_real(html: str, categoria: str) -> list[dict]:
     """
-    Extrai os produtos e monta links válidos com a tag de afiliado.
+    Extrai produtos com desconto real da Amazon e cria links válidos.
     """
     soup = BeautifulSoup(html, "html.parser")
     itens = soup.select("div.s-result-item[data-asin]")
     ofertas = []
 
-    for item in itens[:5]:
+    for item in itens[:12]:
         nome = item.select_one("h2 a span")
-        preco = item.select_one("span.a-price span.a-offscreen")
+        preco_atual = item.select_one("span.a-price span.a-offscreen")
+        preco_antigo = item.select_one("span.a-text-price span.a-offscreen")
         link = item.select_one("h2 a")
 
-        if not nome or not link:
+        if not nome or not preco_atual or not preco_antigo or not link:
             continue
 
-        titulo = nome.text.strip()
-        preco_txt = preco.text.strip() if preco else "Preço indisponível"
+        try:
+            preco_atual_val = float(preco_atual.text.replace("R$", "").replace(".", "").replace(",", "."))
+            preco_antigo_val = float(preco_antigo.text.replace("R$", "").replace(".", "").replace(",", "."))
+            desconto = round(100 - (preco_atual_val / preco_antigo_val * 100), 1)
+        except Exception:
+            continue
+
+        # ignora se desconto for baixo
+        if desconto < 10:
+            continue
 
         raw_link = link.get("href")
-
-        # Monta link válido completo
         if raw_link:
             if raw_link.startswith("/"):
                 raw_link = urljoin("https://www.amazon.com.br", raw_link)
@@ -96,31 +103,32 @@ def extrair_ofertas_real(html: str, categoria: str) -> list[dict]:
                 separator = "&" if "?" in raw_link else "?"
                 raw_link = f"{raw_link}{separator}tag={AFFILIATE_TAG}"
 
-            link_final = raw_link
-        else:
-            link_final = "https://www.amazon.com.br"
-
         ofertas.append({
-            "nome": titulo,
-            "preco": preco_txt,
-            "link": link_final,
+            "nome": nome.text.strip(),
+            "preco_atual": f"R$ {preco_atual_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            "preco_antigo": f"R$ {preco_antigo_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            "desconto": desconto,
+            "link": raw_link,
             "categoria": categoria.capitalize(),
         })
 
-    return ofertas
+    return sorted(ofertas, key=lambda o: o["desconto"], reverse=True)
 
 # -----------------------------------------------------
-# 5️⃣ ENVIO PARA O TELEGRAM
+# 5️⃣ ENVIO PARA TELEGRAM
 # -----------------------------------------------------
 async def enviar_oferta_telegram(oferta: dict):
     """
-    Envia mensagem formatada para o grupo.
+    Envia mensagem formatada para o grupo Telegram.
     """
+    fogo = "🔥" if oferta["desconto"] >= 20 else "💸"
+
     mensagem = (
-        f"🔥 <b>{oferta['categoria']} - Oferta Amazon</b>\n\n"
-        f"🛒 <i>{oferta['nome']}</i>\n"
-        f"💰 {oferta['preco']}\n\n"
-        f"➡️ <a href=\"{oferta['link']}\">Ver na Amazon</a>"
+        f"{fogo} <b>{oferta['categoria']} - Oferta Amazon</b>\n\n"
+        f"🛍️ <i>{oferta['nome']}</i>\n"
+        f"💰 <b>{oferta['preco_atual']}</b> (antes {oferta['preco_antigo']})\n"
+        f"📉 Desconto: <b>{oferta['desconto']}%</b>\n\n"
+        f"➡️ <a href=\"{oferta['link']}\">Ver oferta na Amazon</a>"
     )
 
     try:
@@ -130,12 +138,12 @@ async def enviar_oferta_telegram(oferta: dict):
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=False
         )
-        logger.info(f"✅ Enviado: {oferta['nome']}")
+        logger.info(f"✅ Enviado: {oferta['nome']} ({oferta['desconto']}%)")
     except Exception as e:
         logger.error(f"❌ Erro ao enviar para Telegram: {e}")
 
 # -----------------------------------------------------
-# 6️⃣ CICLO PRINCIPAL
+# 6️⃣ CICLO PRINCIPAL DE BUSCA E ENVIO
 # -----------------------------------------------------
 async def job_buscar_e_enviar():
     categorias = ["notebook", "celular", "processador", "ferramenta", "eletrodoméstico"]
@@ -152,7 +160,7 @@ async def job_buscar_e_enviar():
                 await enviar_oferta_telegram(oferta)
                 await asyncio.sleep(10)
         else:
-            logger.warning(f"⚠️ Nenhuma oferta encontrada em {categoria}")
+            logger.warning(f"⚠️ Nenhuma oferta com desconto encontrada em {categoria}")
 
     logger.info("✅ Ciclo concluído!\n")
 
@@ -160,19 +168,19 @@ async def job_buscar_e_enviar():
 # 7️⃣ MAIN LOOP
 # -----------------------------------------------------
 async def main():
-    logger.info("🤖 Iniciando bot Amazon Affiliate com ScrapeOps (versão 2025)...")
+    logger.info("🤖 Iniciando bot Amazon Affiliate (filtro de promoções ativo)...")
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(job_buscar_e_enviar, "interval", minutes=5)
 
-    await job_buscar_e_enviar()  # executa a primeira imediatamente
+    await job_buscar_e_enviar()  # roda uma vez imediatamente
     scheduler.start()
 
     try:
         await asyncio.Future()
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
-        logger.info("🛑 Bot finalizado manualmente.")
+        logger.info("🛑 Bot encerrado manualmente.")
 
 if __name__ == "__main__":
     asyncio.run(main())

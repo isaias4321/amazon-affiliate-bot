@@ -1,115 +1,134 @@
 import os
 import asyncio
 import logging
-import random
-import aiohttp
-from dotenv import load_dotenv
+import requests
+from bs4 import BeautifulSoup
 from telegram import Bot
 from telegram.constants import ParseMode
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# ---------------- CONFIGURAÇÕES ----------------
-load_dotenv()
-
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+# -----------------------------------------------------
+# 1. Configuração do logging
+# -----------------------------------------------------
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# -----------------------------------------------------
+# 2. Variáveis de ambiente
+# -----------------------------------------------------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROUP_ID = os.getenv("GROUP_CHAT_ID")
+GROUP_CHAT_ID = os.getenv("GROUP_CHAT_ID")
 AFFILIATE_TAG = os.getenv("AFFILIATE_TAG")
 SCRAPEOPS_API_KEY = os.getenv("SCRAPEOPS_API_KEY")
 
-SCRAPEOPS_PROXY = "https://proxy.scrapeops.io/v1/"
-
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-    "Mozilla/5.0 (X11; Linux x86_64)",
-]
-
-if not TELEGRAM_TOKEN:
-    logger.error("❌ TELEGRAM_TOKEN não configurado!")
+if not all([TELEGRAM_TOKEN, GROUP_CHAT_ID, AFFILIATE_TAG, SCRAPEOPS_API_KEY]):
+    logger.error("❌ Algumas variáveis de ambiente estão faltando. Verifique o arquivo .env.")
     exit(1)
 
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# ---------------- FUNÇÕES PRINCIPAIS ----------------
+# -----------------------------------------------------
+# 3. Função de busca de produtos na Amazon via ScrapeOps
+# -----------------------------------------------------
+def buscar_produtos_amazon(categoria):
+    base_url = "https://proxy.scrapeops.io/v1/"
+    target_url = f"https://www.amazon.com.br/s?k={categoria}"
 
-async def buscar_produtos_amazon(termo):
-    """
-    Busca produtos reais da Amazon BR via ScrapeOps Proxy
-    """
-    url = SCRAPEOPS_PROXY
     params = {
         "api_key": SCRAPEOPS_API_KEY,
-        "url": f"https://www.amazon.com.br/s?k={termo}",
-        "country": "br"
+        "url": target_url
     }
-    headers = {"User-Agent": random.choice(USER_AGENTS)}
 
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(url, params=params, headers=headers, timeout=30) as resp:
-                html = await resp.text()
-                logger.info(f"🔍 [{termo}] Status {resp.status}")
-                return html
-        except Exception as e:
-            logger.error(f"Erro ao buscar {termo}: {e}")
-            return None
-
-async def enviar_mensagem_telegram(texto):
-    """
-    Envia mensagem formatada para o grupo no Telegram
-    """
     try:
-        await bot.send_message(
-            chat_id=GROUP_ID,
-            text=texto,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True
-        )
-        logger.info("✅ Mensagem enviada com sucesso!")
+        response = requests.get(base_url, params=params, timeout=30)
+        if response.status_code != 200:
+            logger.warning(f"⚠️ Erro HTTP {response.status_code} ao buscar {categoria}")
+            return []
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        produtos = []
+        resultados = soup.select("div[data-component-type='s-search-result']")
+
+        for item in resultados[:5]:  # Limita a 5 resultados
+            nome = item.select_one("h2 a span")
+            preco_atual = item.select_one(".a-price-whole")
+            preco_antigo = item.select_one(".a-text-price .a-offscreen")
+            link_tag = item.select_one("h2 a")
+
+            if not nome or not link_tag or not preco_atual:
+                continue
+
+            nome = nome.text.strip()
+            link = "https://www.amazon.com.br" + link_tag["href"].split("?")[0]
+            preco_atual = preco_atual.text.strip()
+            preco_antigo = preco_antigo.text.strip() if preco_antigo else None
+
+            # Calcula desconto (se houver preço antigo)
+            desconto = None
+            if preco_antigo:
+                try:
+                    preco1 = float(preco_antigo.replace("R$", "").replace(".", "").replace(",", "."))
+                    preco2 = float(preco_atual.replace("R$", "").replace(".", "").replace(",", "."))
+                    desconto = round(100 - (preco2 / preco1 * 100))
+                except:
+                    desconto = None
+
+            produtos.append({
+                "nome": nome,
+                "preco_atual": f"R$ {preco_atual}",
+                "preco_antigo": f"R$ {preco_antigo}" if preco_antigo else None,
+                "desconto": f"{desconto}%" if desconto else None,
+                "link": f"{link}?tag={AFFILIATE_TAG}",
+                "categoria": categoria
+            })
+
+        return produtos
+
     except Exception as e:
-        logger.error(f"❌ Erro ao enviar mensagem: {e}")
+        logger.error(f"❌ Erro ao buscar produtos da categoria {categoria}: {e}")
+        return []
 
-async def processar_e_enviar_ofertas():
-    """
-    Busca produtos e envia pro Telegram
-    """
-    termos = ["notebook", "celular", "processador", "ferramenta", "eletrodoméstico"]
+# -----------------------------------------------------
+# 4. Envio das ofertas no Telegram
+# -----------------------------------------------------
+async def enviar_oferta(oferta):
+    msg = f"🔥 <b>Oferta Amazon - {oferta['categoria'].capitalize()}</b> 🔥\n\n"
+    msg += f"📦 <b>{oferta['nome']}</b>\n"
+    msg += f"💰 <b>{oferta['preco_atual']}</b>\n"
+    if oferta["preco_antigo"]:
+        msg += f"🪶 De: <strike>{oferta['preco_antigo']}</strike>\n"
+    if oferta["desconto"]:
+        msg += f"💥 Desconto: {oferta['desconto']}\n"
+    msg += f"🔗 <a href='{oferta['link']}'>Compre agora na Amazon</a>"
 
-    for termo in termos:
-        html = await buscar_produtos_amazon(termo)
+    try:
+        await bot.send_message(GROUP_CHAT_ID, msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        logger.info(f"✅ Oferta enviada: {oferta['nome']}")
+    except Exception as e:
+        logger.error(f"❌ Erro ao enviar oferta: {e}")
 
-        if html and "Amazon" in html:
-            link_amazon = f"https://www.amazon.com.br/s?k={termo}&tag={AFFILIATE_TAG}"
-            mensagem = (
-                f"🔥 <b>Ofertas de {termo.capitalize()} na Amazon!</b>\n"
-                f"🛒 <a href='{link_amazon}'>Clique aqui para ver as promoções!</a>\n"
-                f"💰 Aproveite antes que acabe!"
-            )
-            await enviar_mensagem_telegram(mensagem)
-        else:
-            logger.warning(f"⚠️ Nenhum resultado encontrado para {termo}")
+# -----------------------------------------------------
+# 5. Loop principal
+# -----------------------------------------------------
+async def job_buscar_e_enviar():
+    categorias = ["notebook", "celular", "processador", "ferramenta", "eletrodoméstico"]
+    logger.info("🔄 Iniciando ciclo de busca...")
 
-        await asyncio.sleep(10)
+    for categoria in categorias:
+        produtos = buscar_produtos_amazon(categoria)
+        for produto in produtos:
+            await enviar_oferta(produto)
+            await asyncio.sleep(5)
 
-# ---------------- AGENDA PRINCIPAL ----------------
+    logger.info("✅ Ciclo concluído!")
 
 async def main():
-    logger.info("🤖 Bot Amazon Ofertas iniciado...")
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(processar_e_enviar_ofertas, "interval", minutes=3)
+    scheduler.add_job(job_buscar_e_enviar, "interval", minutes=5)
     scheduler.start()
-
-    await processar_e_enviar_ofertas()
-    await asyncio.Future()  # Mantém o bot rodando
+    await job_buscar_e_enviar()
+    await asyncio.Future()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("🛑 Bot finalizado manualmente.")
+    asyncio.run(main())

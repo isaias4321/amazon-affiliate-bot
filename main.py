@@ -1,154 +1,178 @@
 import os
-import aiohttp
 import asyncio
 import logging
 import requests
-from dotenv import load_dotenv
+from urllib.parse import urljoin
+from bs4 import BeautifulSoup
 from telegram import Bot
 from telegram.constants import ParseMode
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# -------------------------------
-# 1️⃣ Inicialização e Logging
-# -------------------------------
-load_dotenv()
-
+# -----------------------------------------------------
+# 1️⃣ CONFIGURAÇÃO DE LOGS COLORIDOS
+# -----------------------------------------------------
 logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(message)s",
+    format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
-logger = logging.getLogger("AmazonAffiliateBot")
+logger = logging.getLogger(__name__)
 
-# -------------------------------
-# 2️⃣ Variáveis de Ambiente
-# -------------------------------
+# -----------------------------------------------------
+# 2️⃣ VARIÁVEIS DE AMBIENTE
+# -----------------------------------------------------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROUP_CHAT_ID = os.getenv("GROUP_CHAT_ID")
+GROUP_ID = os.getenv("GROUP_ID")
 AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
 SCRAPEOPS_API_KEY = os.getenv("SCRAPEOPS_API_KEY", "3694ad1e-583c-4a39-bdf9-9de5674814ee")
 
-if not TELEGRAM_TOKEN or not GROUP_CHAT_ID:
-    logger.error("❌ Faltando TELEGRAM_TOKEN ou GROUP_CHAT_ID no ambiente!")
-    raise SystemExit(1)
+if not TELEGRAM_TOKEN or not GROUP_ID:
+    logger.error("❌ Faltando TELEGRAM_TOKEN ou GROUP_ID nas variáveis de ambiente!")
+    exit(1)
 
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# -------------------------------
-# 3️⃣ Função de Busca com Fallback
-# -------------------------------
-SCRAPEOPS_PROXY = "https://proxy.scrapeops.io/v1/"
-
-async def fetch_amazon_html(term: str) -> str | None:
+# -----------------------------------------------------
+# 3️⃣ FUNÇÃO DE RASPAGEM COM SCRAPEOPS
+# -----------------------------------------------------
+def buscar_html_amazon(query: str) -> str | None:
     """
-    Busca HTML da página da Amazon via ScrapeOps (com fallback direto).
+    Faz a busca real na Amazon via ScrapeOps Proxy API.
+    Retorna o HTML da página de busca.
     """
-    headers = {"User-Agent": "Mozilla/5.0"}
-    params = {"api_key": SCRAPEOPS_API_KEY, "url": f"https://www.amazon.com.br/s?k={term}"}
+    url_base = "https://www.amazon.com.br/s"
+    params = {"k": query}
 
-    for attempt in range(2):
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(SCRAPEOPS_PROXY, params=params, headers=headers, timeout=20) as resp:
-                    html = await resp.text()
-                    logger.info(f"🛰️ ScrapeOps {resp.status} — {term} (tentativa {attempt + 1})")
-
-                    if resp.status == 200 and "Amazon.com.br" in html:
-                        return html
-                    await asyncio.sleep(2)
-        except Exception as e:
-            logger.warning(f"⚠️ Erro ScrapeOps ({term}): {e}")
-            await asyncio.sleep(2)
-
-    # 🔁 Fallback: conexão direta
-    logger.warning(f"🌐 Usando modo direto para '{term}'...")
+    proxy_url = "https://proxy.scrapeops.io/v1/"
     try:
-        r = requests.get(f"https://www.amazon.com.br/s?k={term}", headers=headers, timeout=20)
-        if r.status_code == 200:
-            return r.text
-        logger.warning(f"HTTP {r.status_code} no fallback direto para '{term}'")
+        resp = requests.get(
+            proxy_url,
+            params={
+                "api_key": SCRAPEOPS_API_KEY,
+                "url": f"{url_base}?k={query}",
+            },
+            timeout=20
+        )
+
+        if resp.status_code == 200:
+            logger.info(f"✅ HTML recebido para '{query}' (200 OK)")
+            return resp.text
+        else:
+            logger.warning(f"⚠️ Erro HTTP {resp.status_code} ao buscar '{query}'")
+            return None
     except Exception as e:
-        logger.error(f"Erro direto para '{term}': {e}")
-    return None
+        logger.error(f"❌ Erro ScrapeOps '{query}': {e}")
+        return None
 
-# -------------------------------
-# 4️⃣ Simulação de Produtos (Temporário)
-# -------------------------------
-def extrair_ofertas_fake() -> list[dict]:
+# -----------------------------------------------------
+# 4️⃣ EXTRAÇÃO DE OFERTAS REAIS
+# -----------------------------------------------------
+def extrair_ofertas_real(html: str, categoria: str) -> list[dict]:
     """
-    Simula produtos para demonstração.
+    Extrai os produtos e monta links válidos com a tag de afiliado.
     """
-    exemplos = [
-        {
-            "nome": "Notebook Acer Aspire 5 (R$ 500 de desconto)",
-            "preco": "R$ 2.999,00",
-            "link": f"https://www.amazon.com.br/dp/B0CRFYR38G?tag={AFFILIATE_TAG}",
-            "categoria": "Informática",
-        },
-        {
-            "nome": "Smartphone Samsung Galaxy A15 (30% OFF)",
-            "preco": "R$ 999,90",
-            "link": f"https://www.amazon.com.br/dp/B0D3X95R51?tag={AFFILIATE_TAG}",
-            "categoria": "Celulares",
-        },
-        {
-            "nome": "Fone Bluetooth JBL Tune 510BT (20% OFF)",
-            "preco": "R$ 299,90",
-            "link": f"https://www.amazon.com.br/dp/B08W5FXXP8?tag={AFFILIATE_TAG}",
-            "categoria": "Áudio",
-        },
-    ]
-    return exemplos
+    soup = BeautifulSoup(html, "html.parser")
+    itens = soup.select("div.s-result-item[data-asin]")
+    ofertas = []
 
-# -------------------------------
-# 5️⃣ Envio Telegram
-# -------------------------------
-async def enviar_oferta(oferta: dict):
-    msg = (
-        f"🔥 <b>OFERTA AMAZON - {oferta['categoria']}</b> 🔥\n\n"
-        f"📦 <i>{oferta['nome']}</i>\n"
-        f"💰 <b>{oferta['preco']}</b>\n\n"
-        f"➡️ <a href='{oferta['link']}'>COMPRAR NA AMAZON</a>"
-    )
-    try:
-        await bot.send_message(GROUP_CHAT_ID, msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-        logger.info(f"✅ Enviado: {oferta['nome']}")
-    except Exception as e:
-        logger.error(f"❌ Erro ao enviar oferta: {e}")
+    for item in itens[:5]:
+        nome = item.select_one("h2 a span")
+        preco = item.select_one("span.a-price span.a-offscreen")
+        link = item.select_one("h2 a")
 
-# -------------------------------
-# 6️⃣ Agendador Principal
-# -------------------------------
-async def job_buscar_e_enviar():
-    termos = ["notebook", "celular", "fone bluetooth", "tv", "eletrodoméstico"]
-    logger.info("🔄 Iniciando ciclo de busca...")
-
-    for termo in termos:
-        html = await fetch_amazon_html(termo)
-        if not html:
-            logger.warning(f"⚠️ Falha ao buscar '{termo}'")
+        if not nome or not link:
             continue
 
-        ofertas = extrair_ofertas_fake()
-        for o in ofertas:
-            await enviar_oferta(o)
-            await asyncio.sleep(5)
-    logger.info("✅ Ciclo concluído!")
+        titulo = nome.text.strip()
+        preco_txt = preco.text.strip() if preco else "Preço indisponível"
 
-# -------------------------------
-# 7️⃣ Loop Assíncrono Principal
-# -------------------------------
+        raw_link = link.get("href")
+
+        # Monta link válido completo
+        if raw_link:
+            if raw_link.startswith("/"):
+                raw_link = urljoin("https://www.amazon.com.br", raw_link)
+
+            if "tag=" not in raw_link:
+                separator = "&" if "?" in raw_link else "?"
+                raw_link = f"{raw_link}{separator}tag={AFFILIATE_TAG}"
+
+            link_final = raw_link
+        else:
+            link_final = "https://www.amazon.com.br"
+
+        ofertas.append({
+            "nome": titulo,
+            "preco": preco_txt,
+            "link": link_final,
+            "categoria": categoria.capitalize(),
+        })
+
+    return ofertas
+
+# -----------------------------------------------------
+# 5️⃣ ENVIO PARA O TELEGRAM
+# -----------------------------------------------------
+async def enviar_oferta_telegram(oferta: dict):
+    """
+    Envia mensagem formatada para o grupo.
+    """
+    mensagem = (
+        f"🔥 <b>{oferta['categoria']} - Oferta Amazon</b>\n\n"
+        f"🛒 <i>{oferta['nome']}</i>\n"
+        f"💰 {oferta['preco']}\n\n"
+        f"➡️ <a href=\"{oferta['link']}\">Ver na Amazon</a>"
+    )
+
+    try:
+        await bot.send_message(
+            chat_id=GROUP_ID,
+            text=mensagem,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=False
+        )
+        logger.info(f"✅ Enviado: {oferta['nome']}")
+    except Exception as e:
+        logger.error(f"❌ Erro ao enviar para Telegram: {e}")
+
+# -----------------------------------------------------
+# 6️⃣ CICLO PRINCIPAL
+# -----------------------------------------------------
+async def job_buscar_e_enviar():
+    categorias = ["notebook", "celular", "processador", "ferramenta", "eletrodoméstico"]
+    logger.info("🔄 Iniciando ciclo de busca...")
+
+    for categoria in categorias:
+        html = buscar_html_amazon(categoria)
+        if not html:
+            continue
+
+        ofertas = extrair_ofertas_real(html, categoria)
+        if ofertas:
+            for oferta in ofertas:
+                await enviar_oferta_telegram(oferta)
+                await asyncio.sleep(10)
+        else:
+            logger.warning(f"⚠️ Nenhuma oferta encontrada em {categoria}")
+
+    logger.info("✅ Ciclo concluído!\n")
+
+# -----------------------------------------------------
+# 7️⃣ MAIN LOOP
+# -----------------------------------------------------
 async def main():
-    logger.info("🤖 Iniciando bot Amazon Affiliate (versão moderna)...")
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(job_buscar_e_enviar, "interval", minutes=3)
-    scheduler.start()
+    logger.info("🤖 Iniciando bot Amazon Affiliate com ScrapeOps (versão 2025)...")
 
-    await job_buscar_e_enviar()
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(job_buscar_e_enviar, "interval", minutes=5)
+
+    await job_buscar_e_enviar()  # executa a primeira imediatamente
+    scheduler.start()
 
     try:
         await asyncio.Future()
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
+        logger.info("🛑 Bot finalizado manualmente.")
 
 if __name__ == "__main__":
     asyncio.run(main())

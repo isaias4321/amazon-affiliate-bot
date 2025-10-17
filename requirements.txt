@@ -1,5 +1,5 @@
 python-telegram-bot[job-queue]==21.6
-aiohttp
-beautifulsoup4
-python-dotenv
-requests
+aiohttp==3.10.5
+beautifulsoup4==4.12.3
+requests==2.32.3
+nest_asyncio==1.6.0

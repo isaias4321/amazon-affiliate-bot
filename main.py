@@ -1,150 +1,113 @@
-import os
 import asyncio
 import logging
-import requests
+import os
+import re
+import aiohttp
 from bs4 import BeautifulSoup
-from telegram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from telegram import Bot
 
-# =============================
-# 🔧 CONFIGURAÇÕES GERAIS
-# =============================
+# === CONFIGURAÇÕES ===
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8463817884:AAE23cMr1605qbMV4c79cMcr8F5dn0ETqRo")
 GROUP_ID = int(os.getenv("GROUP_ID", "-1003140787649"))
-AXESSO_API_KEY = os.getenv("AXESSO_API_KEY", "fb2f7fd38c57470489d000c1c7aa8cd6")
 AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
 
-# Categorias que serão buscadas
-CATEGORIES = ["eletrodomesticos", "computers", "tools"]
-
-# Configurar logs
+# === LOGGING ===
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Inicializar o bot
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
+# === URL BASE ===
+AMAZON_BASE = "https://www.amazon.com.br/s?k={query}&s=price-asc-rank"
 
-# =============================
-# 🔍 FUNÇÃO: Buscar Ofertas
-# =============================
-async def buscar_ofertas(categoria):
-    """Busca ofertas usando Axesso API; fallback com scraping da Amazon"""
-    logging.info(f"🔍 Buscando ofertas na categoria '{categoria}'...")
-
-    base_url = "https://api.axesso.de/amz/amazon-best-sellers-list"
-    params = {"url": f"https://www.amazon.com.br/s?k={categoria}"}
-    headers = {"x-api-key": AXESSO_API_KEY}
+# === FUNÇÃO DE SCRAPING ===
+async def buscar_ofertas_categoria(session, categoria):
+    url = AMAZON_BASE.format(query=categoria.replace(" ", "+"))
+    logging.info(f"🔍 Buscando ofertas em '{categoria}'...")
+    produtos = []
 
     try:
-        response = requests.get(base_url, headers=headers, params=params, timeout=15)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("countProducts", 0) > 0:
-                produtos = data.get("products", [])
-                logging.info(f"✅ {len(produtos)} ofertas encontradas em {categoria} via Axesso API.")
-                return produtos
-            else:
-                logging.warning(f"⚠️ Nenhuma oferta encontrada na API para '{categoria}'.")
+        async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}) as resp:
+            if resp.status != 200:
+                logging.warning(f"⚠️ Falha ao acessar Amazon para {categoria} (HTTP {resp.status})")
                 return []
-        elif response.status_code == 401:
-            logging.warning(f"⚠️ Erro 401 — chave API inválida para '{categoria}', usando scraping como fallback...")
-            return await scraping_fallback(categoria)
-        else:
-            logging.error(f"❌ Erro {response.status_code} ao buscar '{categoria}'")
-            return await scraping_fallback(categoria)
-    except Exception as e:
-        logging.error(f"❌ Erro inesperado em '{categoria}': {e}")
-        return await scraping_fallback(categoria)
 
-# =============================
-# 🕵️ FUNÇÃO: Scraping Fallback
-# =============================
-async def scraping_fallback(categoria):
-    """Busca produtos via scraping direto da Amazon (fallback)"""
-    try:
-        logging.info(f"🕵️ Usando fallback scraping para '{categoria}'...")
-        url = f"https://www.amazon.com.br/s?k={categoria}"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        response = requests.get(url, headers=headers, timeout=10)
+            html = await resp.text()
+            soup = BeautifulSoup(html, "html.parser")
 
-        if response.status_code != 200:
-            logging.error(f"❌ Falha ao acessar Amazon para {categoria}")
-            return []
+            itens = soup.select("div[data-component-type='s-search-result']")
+            for item in itens:
+                nome_el = item.select_one("h2 a span")
+                preco_el = item.select_one(".a-price span.a-offscreen")
+                link_el = item.select_one("h2 a")
+                desconto_el = item.select_one(".a-text-price")
 
-        try:
-            soup = BeautifulSoup(response.text, "lxml")
-        except Exception:
-            soup = BeautifulSoup(response.text, "html.parser")
+                if not (nome_el and preco_el and link_el):
+                    continue
 
-        produtos = []
-        for item in soup.select(".s-result-item"):
-            titulo = item.select_one("h2 a span")
-            preco = item.select_one(".a-price span.a-offscreen")
-            link = item.select_one("h2 a")
+                nome = nome_el.text.strip()
+                preco = preco_el.text.strip()
+                link = "https://www.amazon.com.br" + link_el["href"]
 
-            if titulo and preco and link:
-                produtos.append({
-                    "productTitle": titulo.text.strip(),
-                    "productRating": "",
-                    "countReview": "",
-                    "url": f"https://www.amazon.com.br{link['href']}",
-                })
-        logging.info(f"✅ {len(produtos)} produtos coletados via fallback para '{categoria}'")
-        return produtos
+                # Tenta detectar desconto
+                desconto_texto = item.select_one(".a-row.a-size-base.a-color-secondary span")
+                desconto = 0
+                if desconto_texto:
+                    match = re.search(r"(\d+)%", desconto_texto.text)
+                    if match:
+                        desconto = int(match.group(1))
+
+                if desconto >= 15:
+                    produtos.append({
+                        "nome": nome,
+                        "preco": preco,
+                        "desconto": desconto,
+                        "link": f"{link}?tag={AFFILIATE_TAG}"
+                    })
+
+            logging.info(f"✅ {len(produtos)} produtos coletados via scraping para '{categoria}'")
+            return produtos
 
     except Exception as e:
-        logging.error(f"❌ Erro no fallback '{categoria}': {e}")
+        logging.error(f"❌ Erro ao buscar {categoria}: {e}")
         return []
 
-# =============================
-# 💬 ENVIAR MENSAGEM PARA TELEGRAM
-# =============================
-async def enviar_mensagem(bot, produto):
-    try:
-        nome = produto.get("productTitle", "Produto sem nome")
-        url = produto.get("url", "")
-        msg = (
-            f"🔥 *{nome}*\n"
-            f"[Ver na Amazon](https://www.amazon.com.br{url})\n"
-            f"🛒 #{produto.get('productRating', '⭐️Sem avaliação')}"
-        )
+# === CICLO DE BUSCA ===
+async def ciclo_de_busca(bot):
+    categorias = ["eletrodomésticos", "processador", "ferramenta"]
 
-        await bot.send_message(chat_id=GROUP_ID, text=msg, parse_mode="Markdown")
-    except Exception as e:
-        logging.error(f"⚠️ Erro ao enviar mensagem para Telegram: {e}")
+    async with aiohttp.ClientSession() as session:
+        todas_ofertas = []
+        for categoria in categorias:
+            ofertas = await buscar_ofertas_categoria(session, categoria)
+            todas_ofertas.extend(ofertas)
 
-# =============================
-# 🔁 CICLO PRINCIPAL
-# =============================
-async def ciclo_de_busca():
-    logging.info("🔄 Iniciando ciclo de busca de ofertas...")
-    ofertas_encontradas = False
+        if not todas_ofertas:
+            logging.info("⚠️ Nenhuma oferta válida encontrada neste ciclo.")
+            return
 
-    for categoria in CATEGORIES:
-        produtos = await buscar_ofertas(categoria)
-        if produtos:
-            ofertas_encontradas = True
-            for produto in produtos[:3]:  # limita 3 por categoria
-                await enviar_mensagem(bot, produto)
-        else:
-            logging.info(f"⚠️ Nenhuma oferta válida encontrada em {categoria}.")
+        for oferta in todas_ofertas:
+            msg = (
+                f"🔥 *{oferta['nome']}*\n"
+                f"💰 Preço: {oferta['preco']}\n"
+                f"📉 Desconto: {oferta['desconto']}%\n"
+                f"🔗 [Ver na Amazon]({oferta['link']})"
+            )
+            await bot.send_message(chat_id=GROUP_ID, text=msg, parse_mode="Markdown", disable_web_page_preview=False)
 
-    if not ofertas_encontradas:
-        logging.info("⚠️ Nenhuma oferta encontrada neste ciclo.")
-    else:
-        logging.info("✅ Ciclo concluído e ofertas enviadas!")
+        logging.info(f"📢 {len(todas_ofertas)} ofertas enviadas para o grupo!")
 
-# =============================
-# 🚀 MAIN
-# =============================
+# === MAIN ===
 async def main():
+    bot = Bot(token=TELEGRAM_BOT_TOKEN)
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(ciclo_de_busca, "interval", minutes=2)
+
+    scheduler.add_job(lambda: asyncio.create_task(ciclo_de_busca(bot)), "interval", minutes=2)
     scheduler.start()
 
-    logging.info("🤖 Iniciando bot *Amazon Ofertas Brasil* (2 em 2 minutos)...")
-    await ciclo_de_busca()
+    logging.info("🤖 Iniciando bot *Amazon Ofertas Brasil* (modo scraping, 2 em 2 minutos)...")
 
-    # Mantém o bot rodando
+    # Executa o primeiro ciclo imediatamente
+    await ciclo_de_busca(bot)
+
     while True:
         await asyncio.sleep(60)
 

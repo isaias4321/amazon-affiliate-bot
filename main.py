@@ -11,7 +11,7 @@ import requests
 TOKEN = "8463817884:AAG1cuPG4l77RFy8l95WsCjj9tp88dRDomE"
 GROUP_ID = -1003140787649
 AFFILIATE_TAG = "isaias06f-20"
-AXESSO_API_KEY = "59ce64518d90456d95ad55f293bb877e"  # sua chave primária
+AXESSO_API_KEY = "fb2f7fd38c57470489d000c1c7aa8cd6"  # sua chave primária
 
 # ======================================================
 # ⚙️ LOGGING

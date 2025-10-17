@@ -1,163 +1,123 @@
-import os
-import time
-import logging
 import requests
-from bs4 import BeautifulSoup
-from telegram import Bot
-from telegram.constants import ParseMode
-from apscheduler.schedulers.background import BackgroundScheduler
+import logging
+import asyncio
+from telegram import Bot, Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# -----------------------------------------------------
-# CONFIGURAÇÕES PRINCIPAIS
-# -----------------------------------------------------
-TELEGRAM_TOKEN = "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A"
-GROUP_ID = "-4983279500"
+# 🔑 CONFIGURAÇÕES
+TOKEN = "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6AT"
+CHAT_ID = "-4983279500"
+API_KEY = "59ce64518d90456d95ad55f293bb877e"
 AFFILIATE_TAG = "isaias06f-20"
-SCRAPEOPS_API_KEY = "3694ad1e-583c-4a39-bdf9-9de5674814ee"
 
-# -----------------------------------------------------
-# LOGGING
-# -----------------------------------------------------
+# 🔍 CATEGORIAS A SEREM MONITORADAS
+CATEGORIES = {
+    "Eletrodomésticos": "https://www.amazon.com.br/gp/bestsellers/appliances",
+    "Peças de Computador": "https://www.amazon.com.br/gp/bestsellers/computers",
+    "Ferramentas": "https://www.amazon.com.br/gp/bestsellers/hi"
+}
+
 logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
 )
-logger = logging.getLogger(__name__)
 
-bot = Bot(token=TELEGRAM_TOKEN)
+scheduler = AsyncIOScheduler()
 
-# -----------------------------------------------------
-# FUNÇÃO DE BUSCA DE OFERTAS
-# -----------------------------------------------------
-def buscar_ofertas(categoria):
-    """
-    Busca ofertas reais na Amazon Brasil via ScrapeOps.
-    Filtra apenas promoções com 15% de desconto ou mais.
-    """
-    logger.info(f"🔍 Buscando ofertas em '{categoria}'...")
 
-    url = f"https://www.amazon.com.br/s?k={categoria}&tag={AFFILIATE_TAG}"
+# 📦 Função para buscar best-sellers via Axesso API
+def buscar_best_sellers(categoria_nome, categoria_url):
+    url = "https://api.axesso.de/amz/amazon-best-sellers-list"
+    params = {"url": categoria_url, "page": 1}
+    headers = {"x-rapidapi-key": API_KEY}
 
+    logging.info(f"🔍 Buscando best-sellers em {categoria_nome}...")
     try:
-        proxy_url = "https://proxy.scrapeops.io/v1/"
-        params = {
-            "api_key": SCRAPEOPS_API_KEY,
-            "url": url,
-        }
-
-        response = requests.get(proxy_url, params=params, timeout=30)
+        response = requests.get(url, headers=headers, params=params, timeout=15)
         response.raise_for_status()
+        data = response.json()
 
-        logger.info(f"✅ HTML recebido para '{categoria}' ({response.status_code} OK)")
+        produtos_filtrados = []
+        for p in data.get("products", []):
+            if p.get("productRating"):
+                rating_str = p["productRating"].split(" ")[0]
+                try:
+                    rating = float(rating_str)
+                    if rating >= 4.0:
+                        produtos_filtrados.append(p)
+                except ValueError:
+                    continue
 
-        # ✅ USAR PARSER NATIVO COMPATÍVEL
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        produtos = []
-        itens = soup.select("div[data-component-type='s-search-result']")
-
-        for item in itens:
-            nome_elem = item.select_one("h2 a span")
-            preco_elem = item.select_one("span.a-price > span.a-offscreen")
-            preco_antigo_elem = item.select_one("span.a-text-price > span.a-offscreen")
-            link_elem = item.select_one("h2 a")
-
-            if not (nome_elem and preco_elem and link_elem):
-                continue
-
-            nome = nome_elem.text.strip()
-            preco = preco_elem.text.strip().replace("R$", "").replace(",", ".").strip()
-            preco = float(preco) if preco else 0.0
-
-            if preco_antigo_elem:
-                preco_antigo = preco_antigo_elem.text.strip().replace("R$", "").replace(",", ".").strip()
-                preco_antigo = float(preco_antigo) if preco_antigo else 0.0
-            else:
-                preco_antigo = 0.0
-
-            if preco_antigo > preco:
-                desconto = round((1 - preco / preco_antigo) * 100, 1)
-            else:
-                desconto = 0
-
-            if desconto >= 15:
-                link_produto = f"https://www.amazon.com.br{link_elem['href'].split('?')[0]}?tag={AFFILIATE_TAG}"
-
-                produtos.append({
-                    "nome": nome,
-                    "preco_atual": f"R$ {preco:.2f}".replace(".", ","),
-                    "preco_antigo": f"R$ {preco_antigo:.2f}".replace(".", ",") if preco_antigo else "—",
-                    "desconto": f"{desconto}%",
-                    "link": link_produto,
-                })
-
-        logger.info(f"🔍 {len(produtos)} ofertas encontradas em {categoria}")
-        return produtos
+        logging.info(f"✅ {len(produtos_filtrados)} produtos com nota >= 4 encontrados em {categoria_nome}")
+        return produtos_filtrados
 
     except Exception as e:
-        logger.error(f"❌ Erro ao buscar {categoria}: {e}")
+        logging.error(f"❌ Erro ao buscar {categoria_nome}: {e}")
         return []
 
 
-# -----------------------------------------------------
-# ENVIO DAS OFERTAS PARA O TELEGRAM
-# -----------------------------------------------------
-def enviar_para_telegram(produtos, categoria):
-    if not produtos:
-        logger.info(f"⚠️ Nenhuma oferta válida encontrada em {categoria}.")
-        return
+# 💬 Envia mensagem formatada pro Telegram
+async def enviar_ofertas(bot: Bot):
+    for nome, url in CATEGORIES.items():
+        produtos = buscar_best_sellers(nome, url)
 
-    for p in produtos:
-        msg = (
-            f"🔥 *{p['nome']}*\n\n"
-            f"💰 De: ~{p['preco_antigo']}~\n"
-            f"✅ Por: *{p['preco_atual']}*\n"
-            f"💥 Desconto: *{p['desconto']}*\n\n"
-            f"[🛒 Ver na Amazon]({p['link']})"
-        )
+        if not produtos:
+            await bot.send_message(chat_id=CHAT_ID, text=f"⚠️ Nenhuma oferta com nota >= 4 em {nome}.")
+            continue
 
-        try:
-            bot.send_message(
-                chat_id=GROUP_ID,
-                text=msg,
-                parse_mode=ParseMode.MARKDOWN,
-                disable_web_page_preview=True,
+        for p in produtos[:5]:  # limita a 5 produtos por categoria
+            titulo = p.get("productTitle", "Produto sem nome")
+            avaliacao = p.get("productRating", "Sem avaliação")
+            link = f"https://www.amazon.com.br{p['url']}?tag={AFFILIATE_TAG}"
+            posicao = p.get("position", "")
+            reviews = p.get("countReview", 0)
+
+            msg = (
+                f"🔥 *{titulo}*\n"
+                f"⭐ {avaliacao} ({reviews} avaliações)\n"
+                f"📦 Categoria: {nome}\n"
+                f"🏅 Posição: {posicao}\n"
+                f"🔗 [Ver na Amazon]({link})"
             )
-            time.sleep(5)
-        except Exception as e:
-            logger.error(f"❌ Erro ao enviar mensagem: {e}")
+
+            await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
 
 
-# -----------------------------------------------------
-# CICLO PRINCIPAL
-# -----------------------------------------------------
-def ciclo_de_busca():
-    logger.info("🔄 Iniciando ciclo de busca de ofertas...")
-    categorias = ["notebook", "celular", "processador", "ferramenta", "eletrodoméstico"]
-
-    for categoria in categorias:
-        produtos = buscar_ofertas(categoria)
-        enviar_para_telegram(produtos, categoria)
-
-    logger.info("✅ Ciclo concluído!")
+# ⏱️ Ciclo de busca
+async def ciclo_de_busca(bot: Bot):
+    logging.info("🔄 Iniciando ciclo de busca de ofertas...")
+    await enviar_ofertas(bot)
+    logging.info("✅ Ciclo concluído!")
 
 
-# -----------------------------------------------------
-# AGENDADOR
-# -----------------------------------------------------
-if __name__ == "__main__":
-    logger.info("🤖 Iniciando bot Amazon Ofertas Brasil (5 em 5 minutos)...")
+# 🤖 Mensagem de boas-vindas
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    welcome_msg = (
+        "🤖 *Bot conectado!*\n\n"
+        "🔔 Enviaremos as melhores ofertas da Amazon a cada 5 minutos!\n"
+        "🛒 Categorias: Eletrodomésticos, Peças de Computador e Ferramentas."
+    )
+    await context.bot.send_message(chat_id=CHAT_ID, text=welcome_msg, parse_mode="Markdown")
 
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(ciclo_de_busca, "interval", minutes=5)
+
+async def main():
+    bot = Bot(token=TOKEN)
+
+    # Envia a mensagem de boas-vindas ao iniciar
+    await bot.send_message(
+        chat_id=CHAT_ID,
+        text="🤖 *Bot conectado!*\n\n🔔 Enviaremos as melhores ofertas da Amazon a cada 5 minutos!\n🛒 Categorias: Eletrodomésticos, Peças de Computador e Ferramentas.",
+        parse_mode="Markdown"
+    )
+
+    # Inicia agendador
+    scheduler.add_job(lambda: asyncio.create_task(ciclo_de_busca(bot)), "interval", minutes=5)
     scheduler.start()
 
-    # Executa a primeira busca imediatamente
-    ciclo_de_busca()
+    logging.info("🚀 Bot Amazon Ofertas Brasil iniciado (atualiza a cada 5 min)...")
+    await asyncio.Event().wait()
 
-    try:
-        while True:
-            time.sleep(60)
-    except KeyboardInterrupt:
-        scheduler.shutdown()
-        logger.info("🛑 Bot finalizado.")
+
+if __name__ == "__main__":
+    asyncio.run(main())

@@ -1,114 +1,166 @@
 import asyncio
 import logging
-import requests
-from bs4 import BeautifulSoup
+from apscheduler.schedulers.background import BackgroundScheduler
 from telegram import Bot
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import requests
 
-# ==============================
-# 🔧 CONFIGURAÇÕES DO BOT
-# ==============================
-TELEGRAM_TOKEN = "8463817884:AAG1cuPG4l77RFy8l95WsCjj9tp88dRDomE"
+# ======================================================
+# 🔧 CONFIGURAÇÕES PRINCIPAIS
+# ======================================================
+
+TOKEN = "8463817884:AAG1cuPG4l77RFy8l95WsCjj9tp88dRDomE"
 GROUP_ID = -1003140787649
 AFFILIATE_TAG = "isaias06f-20"
-CATEGORIES = ["notebook", "celular", "processador", "ferramenta", "eletrodoméstico"]
+AXESSO_API_KEY = "59ce64518d90456d95ad55f293bb877e"  # sua chave primária
 
-# ==============================
+# ======================================================
 # ⚙️ LOGGING
-# ==============================
+# ======================================================
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(levelname)s - %(message)s"
 )
+logger = logging.getLogger(__name__)
 
-# ==============================
-# 🔍 FUNÇÃO DE BUSCA DE OFERTAS
-# ==============================
-async def buscar_ofertas(categoria):
-    logging.info(f"🔍 Buscando ofertas em '{categoria}'...")
-    url = f"https://www.amazon.com.br/s?k={categoria}&i=aps&sort=price-asc-rank"
-    headers = {"User-Agent": "Mozilla/5.0"}
+# ======================================================
+# 🤖 CONFIGURAÇÃO DO BOT TELEGRAM
+# ======================================================
+
+bot = Bot(token=TOKEN)
+
+# ======================================================
+# 🛒 FUNÇÃO: Buscar ofertas usando API Axesso
+# ======================================================
+
+def buscar_ofertas(categoria: str):
+    """
+    Busca produtos da categoria usando a API Axesso.
+    Retorna uma lista de dicionários com informações básicas dos produtos.
+    """
+    logger.info(f"🔍 Buscando ofertas na categoria '{categoria}'...")
+
     try:
-        response = requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-        logging.info(f"✅ HTML recebido para '{categoria}' ({response.status_code} OK)")
+        url = "https://api.axesso.de/amz/amazon-best-sellers-list"
+        params = {
+            "url": f"https://www.amazon.com.br/gp/bestsellers/{categoria}/",
+            "page": 1
+        }
+        headers = {"x-rapidapi-key": AXESSO_API_KEY}
 
-        soup = BeautifulSoup(response.text, "lxml")
-        produtos = soup.select("div[data-component-type='s-search-result']")
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+
+        if response.status_code != 200:
+            logger.error(f"❌ Erro ao buscar '{categoria}': {response.status_code}")
+            return []
+
+        data = response.json()
+        produtos = data.get("products", [])
+
         ofertas = []
+        for produto in produtos:
+            nome = produto.get("productTitle")
+            link = f"https://www.amazon.com.br{produto.get('url')}?tag={AFFILIATE_TAG}"
+            rating = produto.get("productRating")
+            reviews = produto.get("countReview")
+            posicao = produto.get("position")
 
-        for p in produtos:
-            nome = p.select_one("h2 a span")
-            preco = p.select_one(".a-price span.a-offscreen")
-            link = p.select_one("h2 a")
+            ofertas.append({
+                "nome": nome,
+                "link": link,
+                "rating": rating,
+                "reviews": reviews,
+                "posicao": posicao
+            })
 
-            if not nome or not preco or not link:
-                continue
-
-            nome = nome.get_text(strip=True)
-            preco = preco.get_text(strip=True)
-            link = "https://www.amazon.com.br" + link["href"].split("?")[0]
-            link_afiliado = f"{link}?tag={AFFILIATE_TAG}"
-
-            ofertas.append((nome, preco, link_afiliado))
-
-        logging.info(f"🔍 {len(ofertas)} ofertas encontradas em {categoria}")
+        logger.info(f"✅ {len(ofertas)} ofertas encontradas em '{categoria}'")
         return ofertas
 
     except Exception as e:
-        logging.error(f"❌ Erro ao buscar {categoria}: {e}")
+        logger.error(f"⚠️ Erro ao buscar {categoria}: {e}")
         return []
 
-# ==============================
-# 💬 ENVIO DAS OFERTAS
-# ==============================
-async def enviar_ofertas(bot, ofertas):
-    if not ofertas:
-        logging.info("⚠️ Nenhuma oferta válida encontrada.")
+# ======================================================
+# 💬 FUNÇÃO: Enviar mensagens no Telegram
+# ======================================================
+
+async def enviar_para_telegram(oferta):
+    """
+    Envia uma oferta formatada para o grupo do Telegram.
+    """
+    nome = oferta["nome"]
+    link = oferta["link"]
+    rating = oferta["rating"] or "⭐ Sem avaliações"
+    reviews = oferta["reviews"] or 0
+    posicao = oferta["posicao"]
+
+    msg = (
+        f"🔥 *{nome}*\n"
+        f"📊 *Ranking:* {posicao}\n"
+        f"⭐ *Avaliação:* {rating} ({reviews} reviews)\n"
+        f"🔗 [Ver na Amazon]({link})"
+    )
+
+    try:
+        await bot.send_message(
+            chat_id=GROUP_ID,
+            text=msg,
+            parse_mode="Markdown",
+            disable_web_page_preview=True
+        )
+        logger.info(f"✅ Oferta enviada: {nome}")
+    except Exception as e:
+        logger.error(f"⚠️ Erro ao enviar oferta para o Telegram: {e}")
+
+# ======================================================
+# 🔁 CICLO DE BUSCA
+# ======================================================
+
+async def ciclo_de_busca(bot):
+    """
+    Executa o ciclo completo: busca e envia as ofertas.
+    """
+    logger.info("🔄 Iniciando ciclo de busca de ofertas...")
+
+    categorias = ["eletrodomesticos", "computers", "tools"]
+    ofertas_encontradas = []
+
+    for categoria in categorias:
+        resultados = buscar_ofertas(categoria)
+        ofertas_encontradas.extend(resultados)
+        await asyncio.sleep(2)
+
+    if not ofertas_encontradas:
+        logger.info("⚠️ Nenhuma oferta encontrada neste ciclo.")
         return
 
-    for nome, preco, link in ofertas:
-        msg = (
-            f"🔥 *{nome}*\n"
-            f"💰 {preco}\n"
-            f"[🛒 Ver oferta na Amazon]({link})"
-        )
-        try:
-            await bot.send_message(chat_id=GROUP_ID, text=msg, parse_mode="Markdown", disable_web_page_preview=True)
-        except Exception as e:
-            logging.error(f"❌ Erro ao enviar mensagem: {e}")
-        await asyncio.sleep(1)  # evita flood
+    for oferta in ofertas_encontradas[:10]:  # envia até 10 por ciclo
+        await enviar_para_telegram(oferta)
+        await asyncio.sleep(5)
 
-# ==============================
-# ♻️ CICLO DE BUSCA E ENVIO
-# ==============================
-async def ciclo_de_busca(bot):
-    logging.info("🔄 Iniciando ciclo de busca de ofertas...")
-    for categoria in CATEGORIES:
-        ofertas = await buscar_ofertas(categoria)
-        if ofertas:
-            await enviar_ofertas(bot, ofertas)
-        else:
-            logging.info(f"⚠️ Nenhuma oferta válida encontrada em {categoria}.")
-        await asyncio.sleep(2)
-    logging.info("✅ Ciclo concluído!")
+    logger.info("✅ Ciclo concluído!")
 
-# ==============================
-# 🚀 INÍCIO DO BOT
-# ==============================
+# ======================================================
+# 🚀 MAIN (executa o bot e agenda o ciclo)
+# ======================================================
+
 async def main():
-    bot = Bot(token=TELEGRAM_TOKEN)
-    scheduler = AsyncIOScheduler(timezone="UTC")
+    logger.info("🤖 Iniciando bot *Amazon Ofertas Brasil* (2 em 2 minutos)...")
 
-    # executa o ciclo imediatamente e depois a cada 2 minutos
-    scheduler.add_job(lambda: asyncio.create_task(ciclo_de_busca(bot)), "interval", minutes=2)
+    loop = asyncio.get_event_loop()
+    scheduler = BackgroundScheduler()
+
+    def agendar_busca():
+        loop.create_task(ciclo_de_busca(bot))
+
+    scheduler.add_job(agendar_busca, "interval", minutes=2)
     scheduler.start()
 
-    logging.info("🤖 Iniciando bot Amazon Ofertas Brasil (a cada 2 minutos)...")
+    logger.info("✅ Agendador iniciado. Executando primeira busca agora...")
+    await ciclo_de_busca(bot)
 
-    # mantém o processo ativo no Railway
-    await asyncio.Event().wait()
-
+    while True:
+        await asyncio.sleep(1)
 
 if __name__ == "__main__":
     asyncio.run(main())

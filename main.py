@@ -13,9 +13,9 @@ logger = logging.getLogger()
 
 # Variáveis de ambiente (você deve defini-las no Railway)
 import os
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_BOT_TOKEN = os.getenv("8463817884:AAG1cuPG4l77RFy8l95WsCjj9tp88dRDomE")
 GROUP_ID = int(os.getenv("GROUP_ID", "-1003140787649"))
-AXESSO_API_KEY = os.getenv("AXESSO_API_KEY")
+AXESSO_API_KEY = os.getenv("fb2f7fd38c57470489d000c1c7aa8cd6")
 
 # Inicializa o bot do Telegram
 bot = Bot(token=TELEGRAM_BOT_TOKEN)

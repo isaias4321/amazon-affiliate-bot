@@ -1,98 +1,72 @@
 import os
 import asyncio
-import time
-import logging
-import sqlite3
 import aiohttp
-from dotenv import load_dotenv
-from typing import List, Dict
+import logging
+import time
 from bs4 import BeautifulSoup
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ParseMode
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    ContextTypes,
-)
+from telegram import Bot
+from telegram.ext import ApplicationBuilder, CommandHandler
+from typing import List, Dict
 
-# ---------------- Carregar variáveis de ambiente ----------------
-load_dotenv()
+# ========================= CONFIGURAÇÕES =========================
+BOT_TOKEN = os.getenv("BOT_TOKEN") or "COLOQUE_SEU_TOKEN_AQUI"
+GROUP_ID = os.getenv("GROUP_ID") or "-4983279500"
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GROUP_ID = os.getenv("GROUP_ID")
-AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
-
-if not BOT_TOKEN or not GROUP_ID:
-    print("❌ ERRO: Variáveis de ambiente não encontradas!")
-    print("BOT_TOKEN:", BOT_TOKEN)
-    print("GROUP_ID:", GROUP_ID)
-    raise ValueError("BOT_TOKEN e GROUP_ID precisam estar definidos.")
-
-# ---------------- Configurações principais ----------------
-INTERVAL_MIN = 1  # intervalo de postagens em minutos
-MAX_PRODUCTS_PER_ROUND = 3
-REQUEST_DELAY = 2
+# URL principal de promoções da Amazon
 URL_AMAZON_GOLDBOX = "https://www.amazon.com.br/gp/goldbox"
 
-# ---------------- Logs ----------------
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# Limite e tempo de espera entre requisições
+MAX_PRODUCTS_PER_ROUND = 3
+REQUEST_DELAY = 2
+
+# ================================================================
+
+if not BOT_TOKEN or not GROUP_ID:
+    raise ValueError("BOT_TOKEN e GROUP_ID precisam estar definidos.")
+
+# Configuração de logs
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
-# ---------------- Banco de dados ----------------
-DB_PATH = "offers.db"
-conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-conn.execute("""
-CREATE TABLE IF NOT EXISTS offers (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    url TEXT UNIQUE,
-    title TEXT,
-    image TEXT,
-    price_original TEXT,
-    price_deal TEXT,
-    added_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)
-""")
-conn.commit()
-db_lock = asyncio.Lock()
+# ================================================================
 
-# ---------------- Funções auxiliares ----------------
-async def safe_get_text(url: str) -> str:
-    """Faz requisição HTTP segura e retorna HTML."""
+async def safe_get_text(url: str, session: aiohttp.ClientSession = None) -> str:
+    """Faz uma requisição HTTP e retorna o HTML (ou None se falhar)."""
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}) as resp:
-                if resp.status != 200:
-                    logger.warning(f"Erro HTTP {resp.status} ao acessar {url}")
-                    return ""
-                return await resp.text()
+        close_session = False
+        if session is None:
+            session = aiohttp.ClientSession()
+            close_session = True
+
+        async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}) as response:
+            if response.status == 200:
+                return await response.text()
+            else:
+                logger.warning(f"Erro HTTP {response.status} ao acessar {url}")
+                return None
     except Exception as e:
-        logger.error(f"Erro ao acessar {url}: {e}")
-        return ""
-
-def parse_price(text: str) -> float:
-    import re
-    try:
-        text = text.replace(".", "").replace(",", ".")
-        num = float(re.search(r"(\d+(\.\d+)?)", text).group(1))
-        return num
-    except Exception:
-        return 0.0
+        logger.error(f"Erro ao buscar {url}: {e}")
+        return None
+    finally:
+        if close_session:
+            await session.close()
 
 def parse_product_page(html: str, url: str) -> Dict:
+    """Extrai dados de um produto individual."""
     soup = BeautifulSoup(html, "html.parser")
-    title = soup.find("span", id="productTitle")
-    image_tag = soup.find("img", id="landingImage")
-    price_deal = soup.find("span", class_="a-price-whole")
-    price_original = soup.find("span", class_="a-text-price")
+    title = soup.select_one("#productTitle")
+    price = soup.select_one(".a-price .a-offscreen")
+    image = soup.select_one("#imgTagWrapperId img")
 
-    pdata = {
-        "title": title.text.strip() if title else "",
+    return {
+        "title": title.get_text(strip=True) if title else None,
+        "price": price.get_text(strip=True) if price else None,
+        "image": image["src"] if image and image.get("src") else None,
         "url": url,
-        "image": image_tag["src"] if image_tag else "",
-        "price_deal": price_deal.text.strip() if price_deal else "",
-        "price_original": price_original.text.strip() if price_original else "",
     }
-    return pdata
 
 def fetch_promotions_blocking(limit: int = MAX_PRODUCTS_PER_ROUND) -> List[Dict]:
     """Busca promoções diretamente do Goldbox."""
@@ -102,7 +76,9 @@ def fetch_promotions_blocking(limit: int = MAX_PRODUCTS_PER_ROUND) -> List[Dict]
         return []
 
     soup = BeautifulSoup(html, "html.parser")
-    anchors = soup.select("a[href*='/dp/'], a[href*='/gp/']")
+
+    # 🔥 apenas links de produtos válidos
+    anchors = soup.select("a[href*='/dp/']")
     seen = set()
     promotions = []
 
@@ -110,10 +86,12 @@ def fetch_promotions_blocking(limit: int = MAX_PRODUCTS_PER_ROUND) -> List[Dict]
         href = a.get("href")
         if not href:
             continue
+
         if href.startswith("/"):
             prod_url = "https://www.amazon.com.br" + href.split("?")[0]
         else:
             prod_url = href.split("?")[0]
+
         if prod_url in seen:
             continue
         seen.add(prod_url)
@@ -124,7 +102,7 @@ def fetch_promotions_blocking(limit: int = MAX_PRODUCTS_PER_ROUND) -> List[Dict]
             continue
 
         pdata = parse_product_page(page_html, prod_url)
-        if pdata.get("title"):
+        if pdata.get("title") and pdata.get("image"):
             promotions.append(pdata)
 
         if len(promotions) >= limit:
@@ -133,92 +111,52 @@ def fetch_promotions_blocking(limit: int = MAX_PRODUCTS_PER_ROUND) -> List[Dict]
     logger.info("Encontradas %d promoções válidas.", len(promotions))
     return promotions
 
-def build_affiliate_url(url: str) -> str:
-    """Anexa a tag de afiliado ao link."""
-    if "amazon." in url and "tag=" not in url:
-        sep = "&" if "?" in url else "?"
-        return f"{url}{sep}tag={AFFILIATE_TAG}"
-    return url
+# ================================================================
 
-# ---------------- Postagem automática ----------------
-async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
-    """Envia produtos automaticamente no grupo."""
-    promotions = await asyncio.to_thread(fetch_promotions_blocking, MAX_PRODUCTS_PER_ROUND)
+async def postar_ofertas(context):
+    """Tarefa periódica para postar promoções no grupo."""
+    bot = context.bot
+    promotions = fetch_promotions_blocking()
+
     if not promotions:
         logger.info("Nenhuma promoção válida encontrada.")
         return
 
-    for item in promotions:
-        url = item["url"]
-        title = item["title"]
-        image = item.get("image", "")
-        price_original = item.get("price_original", "")
-        price_deal = item.get("price_deal", "")
-        aff_url = build_affiliate_url(url)
-
-        async with db_lock:
-            cur = conn.cursor()
-            cur.execute("SELECT 1 FROM offers WHERE url=?", (url,))
-            if cur.fetchone():
-                continue
-            cur.execute(
-                "INSERT INTO offers (url, title, image, price_original, price_deal) VALUES (?, ?, ?, ?, ?)",
-                (url, title, image, price_original, price_deal),
-            )
-            conn.commit()
-
-        text = f"<b>{title}</b>\n\n💰 {price_deal or 'Preço indisponível'}"
-        if price_original and price_original != price_deal:
-            text += f" (antes {price_original})"
-
-        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Ver oferta na Amazon", url=aff_url)]])
-
+    for p in promotions:
+        msg = f"🛒 *{p['title']}*\n💰 {p['price'] or 'Preço indisponível'}\n🔗 [Ver na Amazon]({p['url']})"
         try:
-            if image:
-                await context.bot.send_photo(
-                    chat_id=GROUP_ID,
-                    photo=image,
-                    caption=text,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=keyboard,
-                )
-            else:
-                await context.bot.send_message(
-                    chat_id=GROUP_ID,
-                    text=text,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=keyboard,
-                )
-            logger.info("Produto postado: %s", title)
+            await bot.send_photo(
+                chat_id=GROUP_ID,
+                photo=p["image"],
+                caption=msg,
+                parse_mode="Markdown",
+            )
+            await asyncio.sleep(5)
         except Exception as e:
-            logger.error(f"Erro ao enviar mensagem: {e}")
+            logger.error(f"Erro ao enviar promoção: {e}")
 
-# ---------------- Comandos do Telegram ----------------
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Bot ativo! Use /start_posting para iniciar as postagens automáticas.")
+# ================================================================
 
-async def cmd_start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.job_queue.run_repeating(postar_ofertas, interval=60, first=10)
-    await update.message.reply_text("📢 Postagens automáticas ativadas a cada 1 minuto.")
-
-async def cmd_stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.job_queue.stop()
-    await update.message.reply_text("⛔ Postagens automáticas paradas.")
-
-async def cmd_postnow(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update, context):
+    """Comando /start para iniciar manualmente."""
+    await update.message.reply_text("🤖 Bot de ofertas da Amazon iniciado!")
     await postar_ofertas(context)
-    await update.message.reply_text("📤 Postagem manual concluída.")
 
-# ---------------- Execução principal ----------------
-def main():
-    logger.info("🚀 Iniciando bot...")
+# ================================================================
+
+def iniciar_bot():
+    """Inicializa o bot do Telegram."""
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("start_posting", cmd_start_posting))
-    app.add_handler(CommandHandler("stop_posting", cmd_stop_posting))
-    app.add_handler(CommandHandler("postnow", cmd_postnow))
 
+    app.add_handler(CommandHandler("start", start))
+
+    # ✅ loop automático de 1 minuto
+    app.job_queue.run_repeating(postar_ofertas, interval=60, first=10)
+
+    logger.info("Bot iniciado com sucesso.")
     app.run_polling()
 
+# ================================================================
+
 if __name__ == "__main__":
-    main()
+    iniciar_bot()

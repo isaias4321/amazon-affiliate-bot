@@ -1,54 +1,97 @@
+import os
 import logging
-from flask import Flask, request
-from telegram import Update
+import asyncio
+import requests
+from bs4 import BeautifulSoup
+from telegram import Update, Bot
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from apscheduler.schedulers.background import BackgroundScheduler
-from scraper import buscar_ofertas_e_enviar
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from keepalive import keep_alive
 
-# Configurações principais
-TOKEN = "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A"
-GROUP_ID = -4983279500
-WEBHOOK_URL = "https://amazon-ofertas-api.up.railway.app"
-PORT = 8080
-
-# Inicialização do app Flask
-app = Flask(__name__)
-application = ApplicationBuilder().token(TOKEN).build()
+# Configurações e variáveis
+TOKEN = os.getenv("TELEGRAM_TOKEN", "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6A")
+GROUP_ID = int(os.getenv("GROUP_ID", "-4983279500"))
+AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "isaias06f-20")
+SCRAPEOPS_API_KEY = os.getenv("SCRAPEOPS_API_KEY", "3694ad1e-583c-4a39-bdf9-9de5674814ee")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Funções de comando do bot
+bot = Bot(token=TOKEN)
+scheduler = AsyncIOScheduler()
+
+# --- Função para buscar ofertas ---
+def buscar_ofertas(categoria):
+    url = f"https://proxy.scrapeops.io/v1/?api_key={SCRAPEOPS_API_KEY}&url=https://www.amazon.com.br/s?k={categoria.replace(' ', '+')}"
+    ofertas = []
+
+    try:
+        r = requests.get(url, timeout=30)
+        if r.status_code != 200:
+            logging.warning(f"⚠️ Erro HTTP {r.status_code} ao buscar {categoria}")
+            return ofertas
+
+        soup = BeautifulSoup(r.text, "html.parser")
+        produtos = soup.select("div.s-main-slot div[data-component-type='s-search-result']")
+        for p in produtos:
+            nome = p.select_one("h2 a span")
+            preco = p.select_one("span.a-price span.a-offscreen")
+            link = p.select_one("h2 a")
+
+            if not (nome and preco and link):
+                continue
+
+            nome, preco, link = nome.text.strip(), preco.text.strip(), "https://www.amazon.com.br" + link["href"]
+            if "?tag=" not in link:
+                link += f"?tag={AFFILIATE_TAG}"
+
+            ofertas.append((nome, preco, link))
+
+        logging.info(f"🔍 {len(ofertas)} ofertas encontradas em {categoria}")
+    except Exception as e:
+        logging.error(f"Erro ao buscar {categoria}: {e}")
+
+    return ofertas
+
+# --- Envio para Telegram ---
+async def enviar_ofertas(context: ContextTypes.DEFAULT_TYPE):
+    categorias = ["notebook", "celular", "processador", "ferramenta", "eletrodoméstico"]
+    for cat in categorias:
+        ofertas = buscar_ofertas(cat)
+        if not ofertas:
+            continue
+
+        for nome, preco, link in ofertas[:3]:
+            msg = f"🔥 *{nome}*
+💰 {preco}
+🔗 [Ver na Amazon]({link})"
+            await bot.send_message(chat_id=GROUP_ID, text=msg, parse_mode="Markdown", disable_web_page_preview=True)
+            await asyncio.sleep(3)
+
+# --- Comandos Telegram ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Bot de Ofertas Amazon Brasil iniciado!")
+    await update.message.reply_text("🤖 Bot Amazon Ofertas Brasil ativo! Use /ofertas para ver as promoções.")
+
+async def ofertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔎 Buscando ofertas mais recentes...")
+    await enviar_ofertas(context)
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ O bot está rodando normalmente!")
+    await update.message.reply_text("✅ Bot em execução e monitorando ofertas a cada 5 minutos.")
 
-async def forcarbusca(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 Buscando ofertas agora...")
-    await buscar_ofertas_e_enviar(context.bot, GROUP_ID)
+# --- Main ---
+async def main():
+    logging.info("🤖 Iniciando bot Amazon Ofertas Brasil...")
+    keep_alive()
 
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("status", status))
-application.add_handler(CommandHandler("forcarbusca", forcarbusca))
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("ofertas", ofertas))
+    app.add_handler(CommandHandler("status", status))
 
-# Webhook Flask
-@app.route(f"/{TOKEN}", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), application.bot)
-    application.update_queue.put_nowait(update)
-    return "OK", 200
+    scheduler.add_job(enviar_ofertas, "interval", minutes=5, args=[None])
+    scheduler.start()
 
-@app.route("/")
-def home():
-    return "🤖 Amazon Ofertas Brasil está online!", 200
-
-# Agendador de busca automática
-scheduler = BackgroundScheduler()
-scheduler.add_job(lambda: application.bot.loop.create_task(buscar_ofertas_e_enviar(application.bot, GROUP_ID)), "interval", minutes=5)
-scheduler.start()
+    await app.run_polling()
 
 if __name__ == "__main__":
-    logging.info("🚀 Iniciando bot com webhook ativo...")
-    application.bot.set_webhook(url=f"{WEBHOOK_URL}/{TOKEN}")
-    app.run(host="0.0.0.0", port=PORT)
+    asyncio.run(main())

@@ -6,7 +6,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # 🔑 CONFIGURAÇÕES
-TOKEN = "8463817884:AAEiLsczIBOSsvazaEgNgkGUCmPJi9tmI6AT"
+TOKEN = "8463817884:AAG1cuPG4l77RFy8l95WsCjj9tp88dRDomE"
 CHAT_ID = "-4983279500"
 API_KEY = "59ce64518d90456d95ad55f293bb877e"
 AFFILIATE_TAG = "isaias06f-20"

@@ -1,162 +1,150 @@
 import os
 import asyncio
-import aiohttp
 import logging
-import time
+from aiohttp import ClientSession
 from bs4 import BeautifulSoup
 from telegram import Bot
-from telegram.ext import ApplicationBuilder, CommandHandler
-from typing import List, Dict
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+)
+from dotenv import load_dotenv
 
-# ========================= CONFIGURAÇÕES =========================
-BOT_TOKEN = os.getenv("BOT_TOKEN") or "COLOQUE_SEU_TOKEN_AQUI"
-GROUP_ID = os.getenv("GROUP_ID") or "-4983279500"
-
-# URL principal de promoções da Amazon
+# ==========================
+# CONFIGURAÇÕES E LOGGING
+# ==========================
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GROUP_ID = os.getenv("GROUP_ID")
 URL_AMAZON_GOLDBOX = "https://www.amazon.com.br/gp/goldbox"
 
-# Limite e tempo de espera entre requisições
-MAX_PRODUCTS_PER_ROUND = 3
-REQUEST_DELAY = 2
-
-# ================================================================
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
 
 if not BOT_TOKEN or not GROUP_ID:
     raise ValueError("BOT_TOKEN e GROUP_ID precisam estar definidos.")
 
-# Configuração de logs
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
+bot = Bot(token=BOT_TOKEN)
 
-# ================================================================
+# ==========================
+# FUNÇÕES DE BUSCA
+# ==========================
 
-async def safe_get_text(url: str, session: aiohttp.ClientSession = None) -> str:
-    """Faz uma requisição HTTP e retorna o HTML (ou None se falhar)."""
+async def safe_get_text(url: str) -> str:
+    """Faz requisição segura e retorna HTML como texto."""
     try:
-        close_session = False
-        if session is None:
-            session = aiohttp.ClientSession()
-            close_session = True
-
-        async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}) as response:
-            if response.status == 200:
-                return await response.text()
-            else:
-                logger.warning(f"Erro HTTP {response.status} ao acessar {url}")
-                return None
+        async with ClientSession() as session:
+            async with session.get(url, timeout=15) as response:
+                if response.status == 200:
+                    return await response.text()
+                logging.warning(f"Erro HTTP {response.status} ao acessar {url}")
+                return ""
     except Exception as e:
-        logger.error(f"Erro ao buscar {url}: {e}")
-        return None
-    finally:
-        if close_session:
-            await session.close()
+        logging.error(f"Erro ao acessar {url}: {e}")
+        return ""
 
-def parse_product_page(html: str, url: str) -> Dict:
-    """Extrai dados de um produto individual."""
-    soup = BeautifulSoup(html, "html.parser")
-    title = soup.select_one("#productTitle")
-    price = soup.select_one(".a-price .a-offscreen")
-    image = soup.select_one("#imgTagWrapperId img")
 
-    return {
-        "title": title.get_text(strip=True) if title else None,
-        "price": price.get_text(strip=True) if price else None,
-        "image": image["src"] if image and image.get("src") else None,
-        "url": url,
-    }
-
-def fetch_promotions_blocking(limit: int = MAX_PRODUCTS_PER_ROUND) -> List[Dict]:
-    """Busca promoções diretamente do Goldbox."""
-    html = asyncio.run(safe_get_text(URL_AMAZON_GOLDBOX))
+def parse_amazon_promotions(html: str):
+    """Extrai as promoções da página GoldBox da Amazon."""
     if not html:
-        logger.warning("Nenhum HTML retornado da Amazon.")
         return []
 
     soup = BeautifulSoup(html, "html.parser")
+    produtos = []
 
-    # 🔥 apenas links de produtos válidos
-    anchors = soup.select("a[href*='/dp/']")
-    seen = set()
-    promotions = []
+    for item in soup.select("div.dealContainer"):
+        titulo = item.select_one("span.dealTitle")
+        preco = item.select_one("span.a-price-whole")
 
-    for a in anchors:
-        href = a.get("href")
-        if not href:
-            continue
+        if titulo and preco:
+            produtos.append({
+                "titulo": titulo.text.strip(),
+                "preco": preco.text.strip(),
+                "link": "https://www.amazon.com.br" + item.find("a")["href"]
+            })
 
-        if href.startswith("/"):
-            prod_url = "https://www.amazon.com.br" + href.split("?")[0]
-        else:
-            prod_url = href.split("?")[0]
+    logging.info(f"Encontradas {len(produtos)} promoções válidas.")
+    return produtos
 
-        if prod_url in seen:
-            continue
-        seen.add(prod_url)
 
-        time.sleep(REQUEST_DELAY)
-        page_html = asyncio.run(safe_get_text(prod_url))
-        if not page_html:
-            continue
+async def fetch_promotions_async():
+    """Função assíncrona para buscar promoções."""
+    html = await safe_get_text(URL_AMAZON_GOLDBOX)
+    return parse_amazon_promotions(html)
 
-        pdata = parse_product_page(page_html, prod_url)
-        if pdata.get("title") and pdata.get("image"):
-            promotions.append(pdata)
 
-        if len(promotions) >= limit:
-            break
+# ==========================
+# JOB DE POSTAGEM AUTOMÁTICA
+# ==========================
 
-    logger.info("Encontradas %d promoções válidas.", len(promotions))
-    return promotions
-
-# ================================================================
-
-async def postar_ofertas(context):
-    """Tarefa periódica para postar promoções no grupo."""
-    bot = context.bot
-    promotions = fetch_promotions_blocking()
+async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
+    """Publica automaticamente promoções no grupo."""
+    promotions = await fetch_promotions_async()
 
     if not promotions:
-        logger.info("Nenhuma promoção válida encontrada.")
+        logging.info("Nenhuma promoção válida encontrada.")
         return
 
-    for p in promotions:
-        msg = f"🛒 *{p['title']}*\n💰 {p['price'] or 'Preço indisponível'}\n🔗 [Ver na Amazon]({p['url']})"
+    for promo in promotions[:5]:  # Limita a 5 promoções por ciclo
+        mensagem = (
+            f"🔥 *{promo['titulo']}*\n"
+            f"💰 Preço: R${promo['preco']}\n"
+            f"🔗 [Ver na Amazon]({promo['link']})"
+        )
         try:
-            await bot.send_photo(
+            await bot.send_message(
                 chat_id=GROUP_ID,
-                photo=p["image"],
-                caption=msg,
+                text=mensagem,
                 parse_mode="Markdown",
+                disable_web_page_preview=True,
             )
-            await asyncio.sleep(5)
         except Exception as e:
-            logger.error(f"Erro ao enviar promoção: {e}")
+            logging.error(f"Erro ao enviar mensagem: {e}")
 
-# ================================================================
+
+# ==========================
+# COMANDO /START
+# ==========================
 
 async def start(update, context):
-    """Comando /start para iniciar manualmente."""
-    await update.message.reply_text("🤖 Bot de ofertas da Amazon iniciado!")
-    await postar_ofertas(context)
+    await update.message.reply_text(
+        "🤖 Bot de ofertas Amazon iniciado!\n"
+        "As promoções serão publicadas automaticamente a cada minuto."
+    )
 
-# ================================================================
 
-def iniciar_bot():
-    """Inicializa o bot do Telegram."""
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+# ==========================
+# FUNÇÃO PRINCIPAL
+# ==========================
 
-    app.add_handler(CommandHandler("start", start))
+async def main():
+    application = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .build()
+    )
 
-    # ✅ loop automático de 1 minuto
-    app.job_queue.run_repeating(postar_ofertas, interval=60, first=10)
+    # Adiciona comando manual de inicialização
+    application.add_handler(CommandHandler("start", start))
 
-    logger.info("Bot iniciado com sucesso.")
-    app.run_polling()
+    # Agenda a postagem automática de ofertas a cada 60 segundos
+    application.job_queue.run_repeating(postar_ofertas, interval=60, first=10)
 
-# ================================================================
+    logging.info("Bot iniciado com sucesso. Aguardando mensagens...")
 
+    # Garante que não haja conflitos de instâncias
+    await bot.delete_webhook(drop_pending_updates=True)
+    await application.run_polling(close_loop=False)
+
+
+# ==========================
+# EXECUÇÃO DIRETA
+# ==========================
 if __name__ == "__main__":
-    iniciar_bot()
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Bot finalizado manualmente.")

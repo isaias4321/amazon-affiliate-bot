@@ -1,6 +1,20 @@
-python-telegram-bot[job-queue]==21.4
-aiohttp==3.10.8
+# Core bot e servidor
+python-telegram-bot==21.3
+fastapi==0.115.0
+uvicorn==0.30.3
+
+# Automação e scraping
+playwright==1.47.0
 beautifulsoup4==4.12.3
+requests==2.32.3
+lxml==5.3.0
+
+# Utilidades
 python-dotenv==1.0.1
-fastapi==0.115.2
-uvicorn==0.30.6
+aiohttp==3.10.5
+
+# Agendamento e tarefas
+APScheduler==3.10.4
+
+# Logs e formatação
+colorama==0.4.6

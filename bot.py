@@ -1,15 +1,16 @@
 import os
-import logging
 import asyncio
-import aiohttp
+import logging
 from dotenv import load_dotenv
-from telegram import Bot
-from telegram.ext import ApplicationBuilder, ContextTypes
-from bs4 import BeautifulSoup
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from playwright.async_api import async_playwright
 
-# Carrega variáveis do .env
+# === CONFIGURAÇÃO DE LOG ===
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+# === VARIÁVEIS DE AMBIENTE ===
 load_dotenv()
-
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = os.getenv("GROUP_ID")
 
@@ -18,82 +19,76 @@ if not BOT_TOKEN or not GROUP_ID:
 
 URL_AMAZON_GOLDBOX = "https://www.amazon.com.br/gp/goldbox"
 
-# Configura logs
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
-
-logger = logging.getLogger(__name__)
-
-
-# Função para buscar promoções
-async def fetch_promotions():
+# === FUNÇÃO PARA BUSCAR PROMOÇÕES ===
+async def fetch_promotions_playwright():
+    logging.info("🕵️ Acessando Amazon Goldbox com Playwright...")
+    promotions = []
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(URL_AMAZON_GOLDBOX, timeout=15) as resp:
-                if resp.status != 200:
-                    logger.warning(f"Erro HTTP {resp.status} ao acessar {URL_AMAZON_GOLDBOX}")
-                    return []
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+            await page.goto(URL_AMAZON_GOLDBOX, timeout=60000)
+            await page.wait_for_selector('div[data-asin]', timeout=20000)
+            
+            items = await page.query_selector_all('div[data-asin]')
+            for item in items[:10]:  # limita para não sobrecarregar
+                asin = await item.get_attribute('data-asin')
+                if not asin:
+                    continue
+                title_el = await item.query_selector('span.a-text-normal')
+                price_el = await item.query_selector('span.a-price-whole')
+                link_el = await item.query_selector('a.a-link-normal')
 
-                html = await resp.text()
-                soup = BeautifulSoup(html, "html.parser")
+                title = await title_el.inner_text() if title_el else None
+                price = await price_el.inner_text() if price_el else None
+                link = await link_el.get_attribute('href') if link_el else None
 
-                produtos = []
-                for item in soup.select(".DealCard")[:5]:
-                    titulo = item.select_one(".DealCardTitle")
-                    link = item.select_one("a")["href"] if item.select_one("a") else None
-                    preco = item.select_one(".a-price-whole")
+                if title and link:
+                    promotions.append({
+                        "title": title.strip(),
+                        "price": price.strip() if price else "N/A",
+                        "url": f"https://www.amazon.com.br{link}"
+                    })
 
-                    if titulo and link:
-                        produtos.append({
-                            "titulo": titulo.get_text(strip=True),
-                            "link": f"https://www.amazon.com.br{link}",
-                            "preco": preco.get_text(strip=True) if preco else "Preço indisponível"
-                        })
-
-                logger.info(f"Encontradas {len(produtos)} promoções.")
-                return produtos
-
+            await browser.close()
+            logging.info(f"✅ {len(promotions)} promoções encontradas.")
     except Exception as e:
-        logger.error(f"Erro ao buscar promoções: {e}")
-        return []
+        logging.error(f"❌ Erro ao buscar promoções: {e}")
+    return promotions
 
-
-# Tarefa periódica (a cada 1 minuto)
+# === FUNÇÃO PARA POSTAR AS OFERTAS ===
 async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
-    bot = context.bot
-    promos = await fetch_promotions()
-
-    if not promos:
-        logger.info("Nenhuma promoção válida encontrada.")
+    logging.info("🔄 Buscando promoções...")
+    promotions = await fetch_promotions_playwright()
+    if not promotions:
+        logging.info("⚠️ Nenhuma promoção válida encontrada.")
         return
 
-    for p in promos:
-        msg = f"🔥 *{p['titulo']}*\n💰 {p['preco']}\n🔗 [Ver oferta]({p['link']})"
+    for promo in promotions[:5]:
+        msg = f"🔥 *{promo['title']}*\n💰 Preço: R${promo['price']}\n🔗 [Ver na Amazon]({promo['url']})"
         try:
-            await bot.send_message(chat_id=GROUP_ID, text=msg, parse_mode="Markdown")
-            await asyncio.sleep(2)
+            await context.bot.send_message(chat_id=GROUP_ID, text=msg, parse_mode="Markdown", disable_web_page_preview=True)
         except Exception as e:
-            logger.error(f"Erro ao enviar mensagem: {e}")
+            logging.error(f"Erro ao enviar mensagem: {e}")
 
+# === COMANDO /start ===
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🤖 Olá! Eu sou o bot de ofertas da Amazon.\n"
+                                    "Vou enviar automaticamente as melhores promoções aqui!")
 
-# Função principal
+# === FUNÇÃO PRINCIPAL ===
 async def main():
-    logger.info("Iniciando bot...")
-
+    logging.info("🚀 Iniciando bot...")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Agendamento da tarefa automática
-    app.job_queue.run_repeating(postar_ofertas, interval=60, first=5)
+    # Registrar comando /start
+    app.add_handler(CommandHandler("start", start))
 
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    logger.info("Bot iniciado com sucesso. Aguardando mensagens...")
+    # Agendar job de promoções a cada 60 minutos
+    app.job_queue.run_repeating(postar_ofertas, interval=3600, first=5)
 
-    await asyncio.Event().wait()  # Mantém o bot ativo
-
+    logging.info("✅ Bot iniciado e aguardando mensagens...")
+    await app.run_polling()
 
 if __name__ == "__main__":
     asyncio.run(main())

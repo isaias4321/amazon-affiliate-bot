@@ -3,7 +3,6 @@ import logging
 import asyncio
 import random
 import aiohttp
-import requests
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -12,10 +11,11 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+from telegram.error import ChatMigrated
 
 # ==================== CONFIG ====================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-DEFAULT_CHAT_ID = os.getenv("CHAT_ID")  # opcional (para postagens automáticas fixas)
+DEFAULT_CHAT_ID = os.getenv("CHAT_ID")
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -33,9 +33,9 @@ async def liberar_antigo_bot():
     except Exception as e:
         logging.warning(f"Falha ao limpar webhook antigo: {e}")
 
-# ==================== OFERTAS ====================
+# ==================== FUNÇÕES DE OFERTAS ====================
 async def buscar_ofertas() -> list[dict]:
-    """Simula busca de ofertas da Amazon (sem API)."""
+    """Simula busca de ofertas."""
     ofertas = [
         {"titulo": "🔥 Echo Dot 5ª Geração com Alexa", "preco": "R$ 279,00", "link": "https://www.amazon.com.br/dp/B09B8V1LZ3"},
         {"titulo": "💻 Notebook Lenovo IdeaPad 3", "preco": "R$ 2.399,00", "link": "https://www.amazon.com.br/dp/B0C3V7T6ZK"},
@@ -56,8 +56,16 @@ async def postar_ofertas_job(context: ContextTypes.DEFAULT_TYPE):
 
     for oferta in ofertas:
         msg = f"📦 *{oferta['titulo']}*\n💰 {oferta['preco']}\n🔗 [Ver oferta]({oferta['link']})"
-        await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
-        await asyncio.sleep(2)
+        try:
+            await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
+            await asyncio.sleep(2)
+        except ChatMigrated as e:
+            novo_id = e.new_chat_id
+            logging.warning(f"⚠️ Chat migrado! Novo chat_id: {novo_id}")
+            os.environ["CHAT_ID"] = str(novo_id)
+            await context.bot.send_message(chat_id=novo_id, text="✅ Chat migrado detectado. Continuando postagens aqui.")
+        except Exception as e:
+            logging.error(f"Erro ao enviar mensagem: {e}")
 
 # ==================== HANDLERS ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -140,10 +148,10 @@ async def iniciar_bot():
         )
         logging.info("⏱️ Postagens automáticas ativas via CHAT_ID de ambiente.")
 
-    logging.info("✅ Bot iniciado e aguardando mensagens...")
     await app.initialize()
     await app.start()
     await app.updater.start_polling()
+    logging.info("✅ Bot iniciado e aguardando mensagens...")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":

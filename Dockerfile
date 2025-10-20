@@ -1,4 +1,4 @@
-# Usa imagem base leve
+# Usa imagem leve com Python 3.12
 FROM python:3.12-slim
 
 # Define diretório de trabalho
@@ -10,6 +10,7 @@ COPY . .
 # Atualiza pacotes e instala dependências necessárias
 RUN apt-get update && apt-get install -y \
     wget \
+    curl \
     libnss3 \
     libxss1 \
     libasound2 \
@@ -33,20 +34,20 @@ RUN apt-get update && apt-get install -y \
     libglu1-mesa \
     libxkbcommon0 \
     fonts-unifont \
-    fonts-dejavu-core \
-    && apt-get clean
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Instala dependências Python
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Instala Playwright e Chromium
-RUN playwright install --with-deps chromium
+# Instala apenas o navegador Chromium (sem dependências extras)
+RUN playwright install chromium
 
-# Define variáveis de ambiente obrigatórias (pode sobrescrever no painel)
-ENV PYTHONUNBUFFERED=1
-
-# Expõe a porta (para FastAPI opcional)
+# Expõe a porta usada pelo bot (opcional, se usar FastAPI)
 EXPOSE 8080
 
-# Inicia o bot (sem múltiplas instâncias)
+# Define variáveis padrão (podem ser sobrescritas no Render)
+ENV BOT_TOKEN=""
+ENV CHAT_ID=""
+
+# Comando de inicialização
 CMD ["python", "bot.py"]

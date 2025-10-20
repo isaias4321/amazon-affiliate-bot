@@ -1,16 +1,15 @@
-# Usa imagem leve com Python 3.12
+# Imagem base com Python 3.12
 FROM python:3.12-slim
 
-# Define o diretório de trabalho
+# Diretório de trabalho
 WORKDIR /app
 
-# Copia apenas o requirements primeiro para cache otimizado
-COPY requirements.txt .
+# Copia o projeto para dentro do container
+COPY . .
 
-# Instala dependências do sistema necessárias para o Playwright + Chromium headless
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Instala dependências do sistema necessárias para Playwright e Chromium
+RUN apt-get update && apt-get install -y \
     wget \
-    curl \
     libnss3 \
     libxss1 \
     libasound2 \
@@ -23,7 +22,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpangocairo-1.0-0 \
     libatk-bridge2.0-0 \
     fonts-liberation \
-    fonts-unifont \
     libdrm2 \
     libxrandr2 \
     libxdamage1 \
@@ -34,24 +32,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxi6 \
     libglu1-mesa \
     libxkbcommon0 \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    fonts-unifont \
+    && apt-get clean
 
 # Instala dependências Python
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Instala o Playwright (sem deps, pois já instalamos manualmente acima)
-RUN playwright install chromium
+# Instala Playwright e Chromium
+RUN playwright install --with-deps chromium
 
-# Copia o restante do código do projeto
-COPY . .
-
-# Define variáveis de ambiente úteis
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-
-# Expõe a porta usada pelo FastAPI/Uvicorn
+# Expõe a porta (para FastAPI opcional)
 EXPOSE 8080
 
-# Comando de inicialização
+# Comando padrão: inicia o bot
 CMD ["python", "bot.py"]

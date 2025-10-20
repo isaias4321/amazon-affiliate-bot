@@ -13,9 +13,10 @@ from telegram.ext import (
 )
 from telegram.error import ChatMigrated
 
-# ==================== CONFIG ====================
+# ==================== CONFIGURAÇÕES ====================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DEFAULT_CHAT_ID = os.getenv("CHAT_ID")
+AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "").strip()  # Seu ID de afiliado Amazon
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -24,7 +25,7 @@ logging.basicConfig(
 
 # ==================== LIMPAR CONFLITOS ====================
 async def liberar_antigo_bot():
-    """Libera polling anterior (evita erro Conflict)."""
+    """Libera polling anterior (evita erro Conflict 409)."""
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook") as resp:
@@ -33,20 +34,37 @@ async def liberar_antigo_bot():
     except Exception as e:
         logging.warning(f"Falha ao limpar webhook antigo: {e}")
 
-# ==================== FUNÇÕES DE OFERTAS ====================
+# ==================== BUSCAR OFERTAS ====================
 async def buscar_ofertas() -> list[dict]:
-    """Simula busca de ofertas."""
-    ofertas = [
-        {"titulo": "🔥 Echo Dot 5ª Geração com Alexa", "preco": "R$ 279,00", "link": "https://www.amazon.com.br/dp/B09B8V1LZ3"},
-        {"titulo": "💻 Notebook Lenovo IdeaPad 3", "preco": "R$ 2.399,00", "link": "https://www.amazon.com.br/dp/B0C3V7T6ZK"},
-        {"titulo": "🎧 Fone JBL Tune 510BT", "preco": "R$ 279,00", "link": "https://www.amazon.com.br/dp/B08WSY9RRG"},
-        {"titulo": "📱 Samsung Galaxy A15", "preco": "R$ 899,00", "link": "https://www.amazon.com.br/dp/B0CSZK8Z12"},
-        {"titulo": "⌚️ Smartwatch Amazfit Bip", "preco": "R$ 349,00", "link": "https://www.amazon.com.br/dp/B08DL4C5D2"},
+    """Simula busca de ofertas com ID de afiliado Amazon."""
+    base_links = [
+        "B09B8V1LZ3",  # Echo Dot
+        "B0C3V7T6ZK",  # Lenovo
+        "B08WSY9RRG",  # JBL
+        "B0CSZK8Z12",  # Galaxy A15
+        "B08DL4C5D2",  # Amazfit
     ]
-    return random.sample(ofertas, random.randint(1, len(ofertas)))
 
+    ofertas = []
+    for asin in base_links:
+        url = f"https://www.amazon.com.br/dp/{asin}"
+        if AFFILIATE_TAG:
+            url += f"?tag={AFFILIATE_TAG}"
+        ofertas.append({
+            "titulo": random.choice([
+                "🔥 Oferta imperdível!",
+                "💥 Promoção relâmpago!",
+                "🛒 Desconto exclusivo!",
+                "🎯 Achado do dia!"
+            ]),
+            "preco": random.choice(["R$ 279,00", "R$ 899,00", "R$ 2.399,00", "R$ 349,00"]),
+            "link": url
+        })
+    return ofertas
+
+# ==================== POSTAGENS AUTOMÁTICAS ====================
 async def postar_ofertas_job(context: ContextTypes.DEFAULT_TYPE):
-    """Job do JobQueue para enviar ofertas periodicamente."""
+    """Job para postar ofertas automaticamente."""
     chat_id = context.job.chat_id
     ofertas = await buscar_ofertas()
 
@@ -87,7 +105,6 @@ def job_name(chat_id: int | str) -> str:
     return f"posting-{chat_id}"
 
 async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Inicia as postagens automáticas."""
     chat_id = update.effective_chat.id
     name = job_name(chat_id)
     existing = context.job_queue.get_jobs_by_name(name)
@@ -106,7 +123,6 @@ async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🚀 Comecei a postar ofertas neste chat a cada 1 minuto!")
 
 async def stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Para as postagens automáticas."""
     chat_id = update.effective_chat.id
     name = job_name(chat_id)
     jobs = context.job_queue.get_jobs_by_name(name)
@@ -124,7 +140,7 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message and update.message.text:
         await update.message.reply_text(f"Você disse: {update.message.text}")
 
-# ==================== INÍCIO DO BOT ====================
+# ==================== INICIALIZAÇÃO DO BOT ====================
 async def iniciar_bot():
     logging.info("🚀 Iniciando bot...")
     await liberar_antigo_bot()
@@ -137,7 +153,7 @@ async def iniciar_bot():
     app.add_handler(CommandHandler("stop_posting", stop_posting))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
-    # Ativa postagens fixas se CHAT_ID estiver setado
+    # Postagens automáticas fixas se CHAT_ID estiver definido
     if DEFAULT_CHAT_ID:
         app.job_queue.run_repeating(
             postar_ofertas_job,

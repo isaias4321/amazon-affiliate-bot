@@ -41,9 +41,7 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== SISTEMA DE POSTAGENS ====================
 async def buscar_ofertas():
-    """
-    Simula a busca de ofertas (você pode substituir depois por raspagem ou API).
-    """
+    """Simula a busca de ofertas (pode ser substituído por raspagem futura)."""
     ofertas = [
         {
             "titulo": "🔥 Echo Dot 5ª geração com Alexa",
@@ -61,12 +59,7 @@ async def buscar_ofertas():
             "preco": "R$ 279,00",
         }
     ]
-
-    # Simula chance de não haver ofertas
-    if random.choice([True, False]):
-        return ofertas
-    else:
-        return []
+    return ofertas if random.choice([True, False]) else []
 
 async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
     ofertas = await buscar_ofertas()
@@ -108,14 +101,16 @@ async def main():
     logging.info("✅ Bot iniciado e aguardando mensagens...")
     await app.run_polling(close_loop=False)
 
-# ==================== EXECUÇÃO SEGURA ====================
+# ==================== EXECUÇÃO ====================
 if __name__ == "__main__":
+    stop_previous_bot_instances()
+
+    # Cria um novo loop se não existir (fix para Python 3.12 / Render)
     try:
-        asyncio.run(main())
-    except RuntimeError as e:
-        if "already running" in str(e):
-            loop = asyncio.get_event_loop()
-            loop.create_task(main())
-            loop.run_forever()
-        else:
-            raise
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    # Executa o bot sem recriar loop
+    loop.run_until_complete(main())

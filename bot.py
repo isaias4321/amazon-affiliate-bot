@@ -3,13 +3,11 @@ import re
 import logging
 import asyncio
 from typing import List, Dict
-
+from aiohttp import web
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, ContextTypes
+    Application, CommandHandler, ContextTypes
 )
-from telegram.error import ChatMigrated
-from aiohttp import web
 from playwright.async_api import async_playwright
 import aiohttp
 
@@ -18,7 +16,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "").strip()
 SHORTENER_API = os.getenv("SHORTENER_API", "https://tinyurl.com/api-create.php?url=")
 PORT = int(os.getenv("PORT", 8080))
-RAILWAY_URL = os.getenv("RAILWAY_URL", "").rstrip("/")  # exemplo: https://meubot.up.railway.app
+RAILWAY_URL = os.getenv("RAILWAY_URL", "").rstrip("/")
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -46,7 +44,7 @@ CATEGORY_REGEX = {
     for cat, kws in KEYWORDS.items()
 }
 
-# =============== FUNÇÕES ===============
+# =============== FUNÇÕES AUXILIARES ===============
 
 def titulo_bate_categoria(titulo: str) -> bool:
     for cat, ativo in CATEGORIES_ENABLED.items():
@@ -115,24 +113,24 @@ async def buscar_ofertas_filtradas(limit: int = 6) -> List[Dict]:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Olá! Eu sou o bot de ofertas Amazon.\n"
-        "Uso webhook no Railway 🚀\n"
-        "Comandos:\n"
-        "/start_posting - começar postagens\n"
+        "👋 Olá! Eu sou o bot de ofertas da Amazon!\n"
+        "🚀 Usando webhook no Railway.\n\n"
+        "Comandos disponíveis:\n"
+        "/start_posting - começar postagens automáticas\n"
         "/stop_posting - parar postagens"
     )
 
 async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    context.job_queue.run_repeating(postar_ofertas, interval=120, first=2, chat_id=chat_id, name=f"posting-{chat_id}")
-    await update.message.reply_text("🚀 Comecei a postar ofertas!")
+    context.job_queue.run_repeating(postar_ofertas, interval=180, first=5, chat_id=chat_id, name=f"posting-{chat_id}")
+    await update.message.reply_text("🚀 Comecei a postar ofertas automaticamente!")
 
 async def stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     jobs = context.job_queue.get_jobs_by_name(f"posting-{chat_id}")
     for j in jobs:
         j.schedule_removal()
-    await update.message.reply_text("🛑 Postagens paradas.")
+    await update.message.reply_text("🛑 Postagens automáticas paradas.")
 
 async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
@@ -148,21 +146,37 @@ async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
 
 # =============== MAIN (WEBHOOK) ===============
 
-async def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("start_posting", start_posting))
-    app.add_handler(CommandHandler("stop_posting", stop_posting))
+async def handle_update(request):
+    """Rota do webhook: recebe as mensagens do Telegram."""
+    try:
+        data = await request.json()
+        update = Update.de_json(data, request.app["bot"])
+        await request.app["application"].process_update(update)
+        return web.Response(text="ok")
+    except Exception as e:
+        logging.error(f"Erro no webhook: {e}")
+        return web.Response(status=500, text="error")
 
-    # 🔗 Configuração Webhook Railway
+async def main():
+    application = Application.builder().token(BOT_TOKEN).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("start_posting", start_posting))
+    application.add_handler(CommandHandler("stop_posting", stop_posting))
+
+    # Configura o webhook no Telegram
     webhook_path = f"/webhook/{BOT_TOKEN}"
     webhook_url = f"{RAILWAY_URL}{webhook_path}"
-    await app.bot.set_webhook(url=webhook_url)
+    await application.bot.set_webhook(url=webhook_url)
     logging.info(f"🌐 Webhook configurado em: {webhook_url}")
 
-    webapp = web.Application()
-    webapp.router.add_post(webhook_path, app.webhook_handler())
-    runner = web.AppRunner(webapp)
+    # Servidor aiohttp para o Railway
+    app = web.Application()
+    app["bot"] = application.bot
+    app["application"] = application
+    app.router.add_post(webhook_path, handle_update)
+
+    runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()

@@ -1,13 +1,13 @@
-# Usa imagem base leve com Python 3.12
+# Usa imagem base leve
 FROM python:3.12-slim
 
-# Diretório de trabalho dentro do container
+# Define diretório de trabalho
 WORKDIR /app
 
-# Copia todos os arquivos do projeto para dentro do container
+# Copia os arquivos do projeto
 COPY . .
 
-# Instala dependências do sistema necessárias para o Playwright e Chromium
+# Atualiza pacotes e instala dependências necessárias
 RUN apt-get update && apt-get install -y \
     wget \
     libnss3 \
@@ -36,14 +36,17 @@ RUN apt-get update && apt-get install -y \
     fonts-dejavu-core \
     && apt-get clean
 
-# Instala dependências Python listadas no requirements.txt
+# Instala dependências Python
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Instala o Playwright e o navegador Chromium (modo headless)
-RUN playwright install chromium
+# Instala Playwright e Chromium
+RUN playwright install --with-deps chromium
 
-# Expõe a porta (para FastAPI opcional ou healthcheck)
+# Define variáveis de ambiente obrigatórias (pode sobrescrever no painel)
+ENV PYTHONUNBUFFERED=1
+
+# Expõe a porta (para FastAPI opcional)
 EXPOSE 8080
 
-# Define o comando padrão para iniciar o bot
+# Inicia o bot (sem múltiplas instâncias)
 CMD ["python", "bot.py"]

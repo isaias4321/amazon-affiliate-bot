@@ -1,139 +1,93 @@
-import logging
 import os
 import asyncio
-from datetime import datetime
+import logging
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters
-)
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from playwright.async_api import async_playwright
+import requests
+import random
 
-# === CONFIGURAÇÕES ===
+# ==================== CONFIGURAÇÕES GERAIS ====================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GROUP_ID = os.getenv("GROUP_ID")
-
-if not BOT_TOKEN:
-    raise ValueError("❌ A variável BOT_TOKEN não está definida!")
+CHAT_ID = os.getenv("CHAT_ID")  # ID do grupo ou canal para postar ofertas
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 
-scheduler = AsyncIOScheduler()
-
-
-# === FUNÇÃO: BUSCAR PROMOÇÕES NA AMAZON ===
-async def fetch_amazon_promotions():
-    """Abre a Amazon GoldBox e coleta as promoções visíveis"""
-    url = "https://www.amazon.com.br/gp/goldbox"
-    logging.info("🔍 Buscando promoções reais da Amazon...")
-    produtos = []
-
+# ==================== FUNÇÃO DE SEGURANÇA ====================
+def stop_previous_bot_instances():
+    """Evita conflito de polling encerrando instâncias antigas."""
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            await page.goto(url, timeout=60000)
-            await page.wait_for_selector("div.a-section", timeout=15000)
-
-            itens = await page.query_selector_all("div[data-asin][data-component-type='s-search-result']")
-
-            for item in itens[:5]:
-                titulo = await item.query_selector_eval("h2 a span", "el => el.innerText") if await item.query_selector("h2 a span") else None
-                link = await item.query_selector_eval("h2 a", "el => el.href") if await item.query_selector("h2 a") else None
-                preco = await item.query_selector_eval("span.a-price-whole", "el => el.innerText") if await item.query_selector("span.a-price-whole") else "Preço indisponível"
-                imagem = await item.query_selector_eval("img.s-image", "el => el.src") if await item.query_selector("img.s-image") else None
-
-                if titulo and link:
-                    produtos.append({
-                        "titulo": titulo.strip(),
-                        "link": link.strip(),
-                        "preco": preco.strip(),
-                        "imagem": imagem
-                    })
-
-            await browser.close()
-
+        if BOT_TOKEN:
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook"
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200:
+                logging.info("🧹 Webhook antigo removido (evita conflito de polling).")
     except Exception as e:
-        logging.error(f"❌ Erro ao buscar promoções: {e}")
+        logging.warning(f"Falha ao limpar webhooks antigos: {e}")
 
-    return produtos
-
-
-# === TAREFA AGENDADA ===
-async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
-    """Posta automaticamente as ofertas no grupo"""
-    produtos = await fetch_amazon_promotions()
-
-    if not produtos:
-        logging.info("⚠️ Nenhuma promoção encontrada no momento.")
-        return
-
-    for p in produtos:
-        msg = (
-            f"🔥 *{p['titulo']}*\n"
-            f"💰 Preço: R$ {p['preco']}\n"
-            f"🔗 [Ver na Amazon]({p['link']})"
-        )
-
-        if p["imagem"]:
-            await context.bot.send_photo(chat_id=GROUP_ID, photo=p["imagem"], caption=msg, parse_mode="Markdown")
-        else:
-            await context.bot.send_message(chat_id=GROUP_ID, text=msg, parse_mode="Markdown")
-
-    logging.info(f"✅ {len(produtos)} promoções postadas às {datetime.now()}")
-
-
-# === COMANDOS DO BOT ===
+# ==================== HANDLERS DE COMANDOS ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Olá! Use /start_posting para iniciar as postagens automáticas de ofertas da Amazon.")
+    await update.message.reply_text("👋 Olá! Sou seu bot de ofertas automáticas.")
 
 async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "ℹ️ *Comandos disponíveis:*\n"
-        "/start - Inicia o bot\n"
-        "/ajuda - Mostra esta mensagem\n"
-        "/start_posting - Começa a postar ofertas automáticas\n",
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text("ℹ️ Use /start_posting para começar a postar ofertas automaticamente.")
 
 async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"Você disse: {update.message.text}")
+    texto = update.message.text
+    await update.message.reply_text(f"Você disse: {texto}")
 
+# ==================== SISTEMA DE POSTAGENS ====================
+async def buscar_ofertas():
+    """
+    Simula a busca de ofertas (você pode substituir depois por raspagem ou API).
+    """
+    ofertas = [
+        {
+            "titulo": "🔥 Echo Dot 5ª geração com Alexa",
+            "link": "https://www.amazon.com.br/dp/B09B8V1LZ3?tag=SEULINK",
+            "preco": "R$ 279,00",
+        },
+        {
+            "titulo": "💻 Notebook Lenovo IdeaPad 3",
+            "link": "https://www.amazon.com.br/dp/B0C3V7T6ZK?tag=SEULINK",
+            "preco": "R$ 2.399,00",
+        },
+        {
+            "titulo": "🎧 Fone Bluetooth JBL Tune 510BT",
+            "link": "https://www.amazon.com.br/dp/B08WSY9RRG?tag=SEULINK",
+            "preco": "R$ 279,00",
+        }
+    ]
 
-# === INICIAR POSTAGENS ===
-async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ativa a tarefa de postagem automática"""
-    if not GROUP_ID:
-        await update.message.reply_text("⚠️ Defina o GROUP_ID nas variáveis de ambiente!")
+    # Simula chance de não haver ofertas
+    if random.choice([True, False]):
+        return ofertas
+    else:
+        return []
+
+async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
+    ofertas = await buscar_ofertas()
+    if not ofertas:
+        logging.info("Nenhuma promoção encontrada no momento.")
         return
 
-    if not scheduler.running:
-        scheduler.start()
+    chat_id = CHAT_ID
+    if not chat_id:
+        logging.warning("CHAT_ID não configurado. Nenhum grupo para postar.")
+        return
 
-    for job in scheduler.get_jobs():
-        job.remove()
+    for oferta in ofertas:
+        msg = f"📦 *{oferta['titulo']}*\n💰 {oferta['preco']}\n🔗 [Ver oferta]({oferta['link']})"
+        await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
+        await asyncio.sleep(2)
 
-    scheduler.add_job(
-        postar_ofertas,
-        "interval",
-        minutes=1,
-        args=[context],
-        id="job_postar_ofertas"
-    )
-
-    await update.message.reply_text("✅ Postagens automáticas iniciadas! A cada 1 minuto serão verificadas novas promoções.")
-
-
-# === FUNÇÃO PRINCIPAL ===
-def main():
+# ==================== FUNÇÃO PRINCIPAL ====================
+async def main():
     logging.info("🚀 Iniciando bot...")
+    stop_previous_bot_instances()
 
     app = (
         ApplicationBuilder()
@@ -141,15 +95,27 @@ def main():
         .build()
     )
 
+    # Handlers básicos
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ajuda", ajuda))
-    app.add_handler(CommandHandler("start_posting", start_posting))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
+    # Agendador automático
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(postar_ofertas, "interval", minutes=1, args=[app])
+    scheduler.start()
+
     logging.info("✅ Bot iniciado e aguardando mensagens...")
-    app.run_polling(close_loop=False)
+    await app.run_polling(close_loop=False)
 
-
-# === EXECUÇÃO ===
+# ==================== EXECUÇÃO SEGURA ====================
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except RuntimeError as e:
+        if "already running" in str(e):
+            loop = asyncio.get_event_loop()
+            loop.create_task(main())
+            loop.run_forever()
+        else:
+            raise

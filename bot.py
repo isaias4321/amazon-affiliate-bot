@@ -13,19 +13,19 @@ from telegram.ext import (
 )
 from telegram.error import ChatMigrated
 
-# ==================== CONFIGURAÇÕES ====================
+# ==================== CONFIG ====================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DEFAULT_CHAT_ID = os.getenv("CHAT_ID")
-AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "").strip()  # Seu ID de afiliado Amazon
+AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "").strip()
+SHORTENER_API = os.getenv("SHORTENER_API", "https://tinyurl.com/api-create.php?url=")
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 
-# ==================== LIMPAR CONFLITOS ====================
+# ==================== FUNÇÕES AUXILIARES ====================
 async def liberar_antigo_bot():
-    """Libera polling anterior (evita erro Conflict 409)."""
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook") as resp:
@@ -34,9 +34,22 @@ async def liberar_antigo_bot():
     except Exception as e:
         logging.warning(f"Falha ao limpar webhook antigo: {e}")
 
+async def encurtar_link(url: str) -> str:
+    """Encorta o link usando TinyURL (ou outro encurtador)."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{SHORTENER_API}{url}") as resp:
+                if resp.status == 200:
+                    short = await resp.text()
+                    if short.startswith("http"):
+                        return short
+    except Exception as e:
+        logging.warning(f"Erro ao encurtar link: {e}")
+    return url  # fallback
+
 # ==================== BUSCAR OFERTAS ====================
 async def buscar_ofertas() -> list[dict]:
-    """Simula busca de ofertas com ID de afiliado Amazon."""
+    """Simula busca de ofertas com afiliado e encurtamento."""
     base_links = [
         "B09B8V1LZ3",  # Echo Dot
         "B0C3V7T6ZK",  # Lenovo
@@ -50,6 +63,7 @@ async def buscar_ofertas() -> list[dict]:
         url = f"https://www.amazon.com.br/dp/{asin}"
         if AFFILIATE_TAG:
             url += f"?tag={AFFILIATE_TAG}"
+        short = await encurtar_link(url)
         ofertas.append({
             "titulo": random.choice([
                 "🔥 Oferta imperdível!",
@@ -58,13 +72,12 @@ async def buscar_ofertas() -> list[dict]:
                 "🎯 Achado do dia!"
             ]),
             "preco": random.choice(["R$ 279,00", "R$ 899,00", "R$ 2.399,00", "R$ 349,00"]),
-            "link": url
+            "link": short
         })
     return ofertas
 
-# ==================== POSTAGENS AUTOMÁTICAS ====================
+# ==================== POSTAGENS ====================
 async def postar_ofertas_job(context: ContextTypes.DEFAULT_TYPE):
-    """Job para postar ofertas automaticamente."""
     chat_id = context.job.chat_id
     ofertas = await buscar_ofertas()
 
@@ -97,7 +110,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "ℹ️ Use /start_posting para iniciar as postagens automáticas de ofertas a cada minuto.\n"
+        "ℹ️ Use /start_posting para iniciar postagens automáticas de ofertas com links encurtados e afiliado.\n"
         "Use /stop_posting para parar."
     )
 
@@ -140,7 +153,7 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message and update.message.text:
         await update.message.reply_text(f"Você disse: {update.message.text}")
 
-# ==================== INICIALIZAÇÃO DO BOT ====================
+# ==================== INICIALIZAÇÃO ====================
 async def iniciar_bot():
     logging.info("🚀 Iniciando bot...")
     await liberar_antigo_bot()
@@ -153,7 +166,6 @@ async def iniciar_bot():
     app.add_handler(CommandHandler("stop_posting", stop_posting))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
-    # Postagens automáticas fixas se CHAT_ID estiver definido
     if DEFAULT_CHAT_ID:
         app.job_queue.run_repeating(
             postar_ofertas_job,

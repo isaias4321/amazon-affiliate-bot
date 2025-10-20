@@ -92,3 +92,59 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+import asyncio
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
+from telegram import Update
+from telegram.ext import ContextTypes
+import logging
+import os
+
+# === CONFIGURAÇÃO DO BOT ===
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+
+# === HANDLERS DE EXEMPLO ===
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 Olá! Sou seu bot e estou pronto para te ajudar!")
+
+async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("ℹ️ Envie uma mensagem e eu irei responder!")
+
+async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text
+    await update.message.reply_text(f"Você disse: {texto}")
+
+# === FUNÇÃO PRINCIPAL ===
+async def main():
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .build()
+    )
+
+    # Adiciona comandos e handlers
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("ajuda", ajuda))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+
+    logging.info("✅ Bot iniciado e aguardando mensagens...")
+    await app.run_polling()
+
+# === CORREÇÃO DO LOOP ASSÍNCRONO ===
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except RuntimeError as e:
+        # Corrige ambiente onde o loop já está ativo (Render/Docker)
+        if "already running" in str(e):
+            loop = asyncio.get_event_loop()
+            loop.create_task(main())
+            loop.run_forever()
+        else:
+            raise

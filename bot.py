@@ -5,9 +5,7 @@ import asyncio
 from typing import List, Dict
 from aiohttp import web
 from telegram import Update
-from telegram.ext import (
-    Application, CommandHandler, ContextTypes
-)
+from telegram.ext import Application, CommandHandler, ContextTypes
 from playwright.async_api import async_playwright
 import aiohttp
 
@@ -144,10 +142,10 @@ async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
         await asyncio.sleep(2)
 
-# =============== MAIN (WEBHOOK) ===============
+# =============== WEBHOOK E HEALTH ===============
 
 async def handle_update(request):
-    """Rota do webhook: recebe as mensagens do Telegram."""
+    """Rota do webhook do Telegram."""
     try:
         data = await request.json()
         update = Update.de_json(data, request.app["bot"])
@@ -157,32 +155,50 @@ async def handle_update(request):
         logging.error(f"Erro no webhook: {e}")
         return web.Response(status=500, text="error")
 
+async def handle_health(request):
+    """Rota de verificação de saúde para o Railway."""
+    return web.Response(text="ok", status=200)
+
+# =============== MAIN ===============
+
 async def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
+    # Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("start_posting", start_posting))
     application.add_handler(CommandHandler("stop_posting", stop_posting))
 
-    # Configura o webhook no Telegram
+    # Configura o webhook
     webhook_path = f"/webhook/{BOT_TOKEN}"
     webhook_url = f"{RAILWAY_URL}{webhook_path}"
     await application.bot.set_webhook(url=webhook_url)
     logging.info(f"🌐 Webhook configurado em: {webhook_url}")
 
-    # Servidor aiohttp para o Railway
+    # Inicializa o app (corrige o erro "Application was not initialized")
+    await application.initialize()
+
+    # Cria servidor web
     app = web.Application()
     app["bot"] = application.bot
     app["application"] = application
     app.router.add_post(webhook_path, handle_update)
+    app.router.add_get("/health", handle_health)
 
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
 
+    # Marca como rodando
+    await application.start()
     logging.info(f"✅ Bot rodando com webhook na porta {PORT}")
-    await asyncio.Event().wait()
+
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await application.stop()
+        await application.shutdown()
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -1,16 +1,15 @@
-# Usa imagem leve com Python
-FROM python:3.13-slim
+# Usa uma imagem leve e estável com Python 3.12
+FROM python:3.12-slim
 
-# Define diretório de trabalho
+# Define o diretório de trabalho
 WORKDIR /app
 
-# Copia os arquivos do projeto
-COPY . .
+# Copia apenas os arquivos necessários para o build inicial
+COPY requirements.txt .
 
-# Atualiza pacotes e instala dependências do sistema necessárias para o Playwright
-RUN apt-get update && apt-get install -y \
+# Instala dependências do sistema necessárias para o Playwright + Chromium headless
+RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
-    g++ \
     libnss3 \
     libxss1 \
     libasound2 \
@@ -33,16 +32,24 @@ RUN apt-get update && apt-get install -y \
     libxi6 \
     libglu1-mesa \
     libxkbcommon0 \
-    && apt-get clean
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Instala dependências do Python
+# Instala as dependências Python
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Instala Playwright (módulo Python + navegador Chromium)
-RUN pip install playwright && playwright install --with-deps chromium
+# Instala Playwright e Chromium (modo headless)
+RUN playwright install --with-deps chromium
 
-# Expõe a porta usada pelo FastAPI/Uvicorn (caso use)
+# Copia o restante do projeto
+COPY . .
+
+# Define variáveis de ambiente úteis
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# Expõe a porta usada pelo Uvicorn ou FastAPI
 EXPOSE 8080
 
-# Comando de inicialização
+# Comando padrão de inicialização
 CMD ["python", "bot.py"]

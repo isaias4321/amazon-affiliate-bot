@@ -6,37 +6,28 @@ import requests
 from bs4 import BeautifulSoup
 from fastapi import FastAPI, Request
 from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-)
+from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import uvicorn
 
 # ==============================
 # CONFIGURAÇÕES
 # ==============================
-TOKEN = os.getenv("BOT_TOKEN")  # seu token do BotFather
+TOKEN = os.getenv("BOT_TOKEN")  # Token do BotFather
 PORT = int(os.getenv("PORT", 8080))
-AFILIADO_TAG = "seu_nome_aqui-20"  # Substitua pela sua tag de afiliado Amazon!
+AFILIADO_TAG = "seunome-20"  # Coloque sua tag de afiliado Amazon aqui!
 
-# Configurações de log
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+# Configuração de logs
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ==============================
-# APP TELEGRAM E FASTAPI
-# ==============================
+# Inicializações principais
 app = Application.builder().token(TOKEN).build()
 scheduler = AsyncIOScheduler()
 webapp = FastAPI()
 
 # ==============================
-# SCRAPER AMAZON (rápido e leve)
+# CATEGORIAS AMAZON
 # ==============================
 CATEGORIAS = {
     "eletronicos": "https://www.amazon.com.br/s?i=electronics",
@@ -45,13 +36,19 @@ CATEGORIAS = {
     "informatica": "https://www.amazon.com.br/s?i=computers"
 }
 
+
+# ==============================
+# FUNÇÃO PARA BUSCAR OFERTAS
+# ==============================
 def buscar_ofertas_amazon(limit=5):
     categoria = random.choice(list(CATEGORIAS.keys()))
     url = CATEGORIAS[categoria]
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) "
-                      "Chrome/118.0.0.0 Safari/537.36"
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/118.0.0.0 Safari/537.36"
+        )
     }
 
     try:
@@ -71,34 +68,43 @@ def buscar_ofertas_amazon(limit=5):
                     "url": f"https://www.amazon.com.br/dp/{asin}?tag={AFILIADO_TAG}"
                 })
         return produtos
+
     except Exception as e:
         logger.error(f"Erro ao buscar ofertas: {e}")
         return []
 
 
 # ==============================
-# FUNÇÕES DO BOT (corrigidas)
+# FUNÇÕES DO BOT
 # ==============================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Olá! Eu sou o bot de ofertas da Amazon.\n\n"
-        "Use /start_posting para começar a postar automaticamente as ofertas aqui!\n"
-        "Use /stop_posting para parar de postar ofertas."
+        "Comandos disponíveis:\n"
+        "• /start_posting → começar postagens automáticas\n"
+        "• /stop_posting → parar postagens automáticas\n"
     )
 
-async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
-    """Envia ofertas automaticamente para o grupo."""
-    chat_id = context.job.id.replace("posting-", "")
+
+async def postar_ofertas(chat_id: str):
+    """Função que envia ofertas automaticamente."""
     logger.info(f"🛍️ Buscando novas ofertas para {chat_id}...")
 
     ofertas = buscar_ofertas_amazon(limit=4)
     if not ofertas:
-        await context.bot.send_message(chat_id, "⚠️ Nenhuma oferta encontrada no momento.")
+        try:
+            await app.bot.send_message(chat_id, "⚠️ Nenhuma oferta encontrada no momento.")
+        except Exception as e:
+            logger.error(f"Erro ao enviar mensagem: {e}")
         return
 
     for oferta in ofertas:
         msg = f"🔥 *{oferta['titulo']}*\n💰 {oferta['preco']}\n👉 [Ver na Amazon]({oferta['url']})"
-        await context.bot.send_message(chat_id, msg, parse_mode="Markdown")
+        try:
+            await app.bot.send_message(chat_id, msg, parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Erro ao enviar mensagem para {chat_id}: {e}")
+
 
 async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Inicia postagens automáticas."""
@@ -114,12 +120,13 @@ async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
         trigger="interval",
         minutes=3,
         id=f"posting-{chat_id}",
-        args=[context],
+        args=[chat_id],
         replace_existing=True,
     )
 
     await update.message.reply_text("✅ Postagens automáticas iniciadas! 🔥")
     logger.info(f"✅ Novo job de postagem criado para o chat {chat_id}")
+
 
 async def stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Para as postagens automáticas."""
@@ -130,7 +137,7 @@ async def stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🛑 Postagens automáticas paradas!")
         logger.info(f"🛑 Postagens paradas para {chat_id}")
     else:
-        await update.message.reply_text("⚠️ Nenhum job ativo para parar.")
+        await update.message.reply_text("⚠️ Nenhuma postagem ativa para parar.")
 
 
 # ==============================
@@ -140,6 +147,7 @@ async def stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def webhook(request: Request, token: str):
     if token != TOKEN:
         return {"error": "Token inválido"}
+
     data = await request.json()
     update = Update.de_json(data, app.bot)
     try:
@@ -147,6 +155,7 @@ async def webhook(request: Request, token: str):
         await app.process_update(update)
     except Exception as e:
         logger.error(f"Erro no webhook: {e}")
+
     return {"status": "ok"}
 
 
@@ -169,6 +178,7 @@ async def main():
     config = uvicorn.Config(webapp, host="0.0.0.0", port=PORT, log_level="info")
     server = uvicorn.Server(config)
     await server.serve()
+
 
 if __name__ == "__main__":
     asyncio.run(main())

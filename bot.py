@@ -66,7 +66,7 @@ async def buscar_ofertas_filtradas(limit=6):
 
 # ===== POSTAGEM AUTOMÁTICA =====
 async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = context.job.chat_id
+    chat_id = context.job.args[0]  # obtém o chat_id passado no job
     ofertas = await buscar_ofertas_filtradas(limit=4)
 
     if not ofertas:
@@ -89,14 +89,12 @@ async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     job_id = f"posting-{chat_id}"
 
-    # Remove o job antigo se já existir
     existing_job = scheduler.get_job(job_id)
     if existing_job:
         scheduler.remove_job(job_id)
         logging.info(f"🧹 Job antigo removido ({job_id})")
 
-    job = scheduler.add_job(postar_ofertas, "interval", minutes=3, args=[context], id=job_id)
-    job.chat_id = chat_id
+    job = scheduler.add_job(postar_ofertas, "interval", minutes=3, args=[chat_id], id=job_id)
     posting_jobs[chat_id] = job
 
     await update.message.reply_text("🚀 Postagens automáticas iniciadas!")
@@ -142,7 +140,6 @@ async def main():
 
     scheduler.start()
 
-    # Inicializa o bot antes do webhook
     await app.initialize()
     await app.start()
 

@@ -7,26 +7,21 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request
 from playwright.async_api import async_playwright
+import uvicorn
 
-# Configuração do log
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+# ===== CONFIGURAÇÕES =====
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# === CONFIGURAÇÕES DO BOT ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-AFFILIATE_TAG = os.getenv("AMAZON_TAG", "SEU_ID_AFILIADO_AQUI")  # 👈 troque pelo seu ID
+AFFILIATE_TAG = os.getenv("AMAZON_TAG", "SEU_ID_AFILIADO_AQUI")
 PORT = int(os.getenv("PORT", 8080))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Ex: https://seu-projeto.up.railway.app
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Exemplo: https://seuapp.up.railway.app
 
+webapp = FastAPI()
 scheduler = AsyncIOScheduler()
 posting_jobs = {}
 
-# === FASTAPI APP ===
-webapp = FastAPI()
-
-# === FUNÇÃO PARA BUSCAR OFERTAS ===
+# ===== BUSCAR OFERTAS =====
 async def buscar_ofertas_filtradas(limit=6):
     categorias = [
         "eletrônicos", "eletrodomésticos", "ferramentas",
@@ -43,14 +38,14 @@ async def buscar_ofertas_filtradas(limit=6):
         await page.goto(url, timeout=90000)
         await asyncio.sleep(5)
 
-        # rola a página pra carregar resultados
+        # Scroll para carregar resultados
         for _ in range(3):
             await page.mouse.wheel(0, 3000)
             await asyncio.sleep(2)
 
         produtos = await page.query_selector_all("div.s-result-item")
-
         resultados = []
+
         for produto in produtos[:limit]:
             titulo = await produto.query_selector("h2 a span")
             link = await produto.query_selector("h2 a")
@@ -58,7 +53,6 @@ async def buscar_ofertas_filtradas(limit=6):
             if titulo and link:
                 nome = (await titulo.inner_text()).strip()
                 url_produto = (await link.get_attribute("href")).strip()
-
                 if url_produto.startswith("/"):
                     url_produto = "https://www.amazon.com.br" + url_produto
                 if "tag=" not in url_produto:
@@ -71,7 +65,7 @@ async def buscar_ofertas_filtradas(limit=6):
         logging.info(f"✅ {len(resultados)} produtos encontrados em {categoria}")
         return resultados
 
-# === FUNÇÃO DE POSTAGEM ===
+# ===== POSTAGENS =====
 async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
     ofertas = await buscar_ofertas_filtradas(limit=4)
@@ -83,11 +77,12 @@ async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
     for nome, link in ofertas:
         msg = f"🛒 *{nome}*\n👉 [Ver na Amazon]({link})"
         await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
+        logging.info(f"📤 Enviado: {nome} → {link}")
         await asyncio.sleep(5)
 
-# === COMANDOS DO BOT ===
+# ===== COMANDOS =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Olá! Use /start_posting para começar a receber ofertas e /stop_posting para parar.")
+    await update.message.reply_text("👋 Olá! Use /start_posting para começar e /stop_posting para parar.")
 
 async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
@@ -98,19 +93,18 @@ async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     job = scheduler.add_job(postar_ofertas, "interval", minutes=3, args=[context], id=f"posting-{chat_id}")
     job.chat_id = chat_id
     posting_jobs[chat_id] = job
-    await update.message.reply_text("🚀 Começando a postar ofertas da Amazon a cada 3 minutos!")
+    await update.message.reply_text("🚀 Postagens automáticas iniciadas!")
 
 async def stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     job = posting_jobs.pop(chat_id, None)
-
     if job:
         job.remove()
         await update.message.reply_text("🛑 Postagens automáticas pausadas.")
     else:
-        await update.message.reply_text("ℹ️ Não há postagens ativas para este chat.")
+        await update.message.reply_text("ℹ️ Nenhuma postagem ativa.")
 
-# === CONFIGURAÇÃO DO FASTAPI WEBHOOK ===
+# ===== WEBHOOK FASTAPI =====
 @webapp.post("/webhook/{token}")
 async def webhook(request: Request, token: str):
     if token != BOT_TOKEN:
@@ -124,21 +118,19 @@ async def webhook(request: Request, token: str):
         logging.error(f"Erro no webhook: {e}")
         return {"status": "error", "detail": str(e)}
 
-# === FUNÇÃO PRINCIPAL ===
+# ===== INICIALIZAÇÃO =====
 async def main():
     global app
     logging.info("🚀 Iniciando bot...")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Handlers de comando
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("start_posting", start_posting))
     app.add_handler(CommandHandler("stop_posting", stop_posting))
 
     scheduler.start()
 
-    # Configuração do webhook
     if WEBHOOK_URL:
         webhook_path = f"/webhook/{BOT_TOKEN}"
         webhook_full_url = f"{WEBHOOK_URL}{webhook_path}"
@@ -147,11 +139,12 @@ async def main():
         await app.bot.set_webhook(webhook_full_url)
         logging.info(f"🌐 Webhook configurado em: {webhook_full_url}")
 
-        # Inicia FastAPI com Uvicorn
-        import uvicorn
-        uvicorn.run(webapp, host="0.0.0.0", port=PORT)
+        # Inicia o servidor Uvicorn sem novo loop
+        config = uvicorn.Config(webapp, host="0.0.0.0", port=PORT, log_level="info")
+        server = uvicorn.Server(config)
+        await server.serve()
     else:
-        logging.info("🤖 Rodando em modo polling local")
+        logging.info("🤖 Rodando em modo polling local...")
         await app.run_polling()
 
 if __name__ == "__main__":

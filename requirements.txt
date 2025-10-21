@@ -1,4 +1,4 @@
-python-telegram-bot==21.4
+python-telegram-bot[webhooks]==21.4
 fastapi==0.115.0
 uvicorn==0.30.3
 beautifulsoup4==4.12.3

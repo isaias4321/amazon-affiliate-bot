@@ -65,21 +65,24 @@ async def buscar_ofertas_filtradas(limit=6):
         return resultados
 
 # ===== POSTAGEM AUTOMÁTICA =====
-async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = context.job.args[0]  # obtém o chat_id passado no job
-    ofertas = await buscar_ofertas_filtradas(limit=4)
+async def postar_ofertas(chat_id: int):
+    try:
+        ofertas = await buscar_ofertas_filtradas(limit=4)
 
-    if not ofertas:
-        await context.bot.send_message(chat_id=chat_id, text="😕 Nenhuma oferta encontrada no momento.")
-        return
+        if not ofertas:
+            await app.bot.send_message(chat_id=chat_id, text="😕 Nenhuma oferta encontrada no momento.")
+            return
 
-    await context.bot.send_message(chat_id=chat_id, text="🔄 Buscando novas ofertas...")
+        await app.bot.send_message(chat_id=chat_id, text="🔄 Buscando novas ofertas...")
 
-    for nome, link in ofertas:
-        msg = f"🛒 *{nome}*\n👉 [Ver na Amazon]({link})"
-        await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
-        logging.info(f"📤 Enviado: {nome} → {link}")
-        await asyncio.sleep(5)
+        for nome, link in ofertas:
+            msg = f"🛒 *{nome}*\n👉 [Ver na Amazon]({link})"
+            await app.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
+            logging.info(f"📤 Enviado: {nome} → {link}")
+            await asyncio.sleep(5)
+
+    except Exception as e:
+        logging.error(f"Erro ao postar ofertas: {e}")
 
 # ===== COMANDOS DO BOT =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):

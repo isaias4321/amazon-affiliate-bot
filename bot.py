@@ -1,159 +1,160 @@
 import os
 import asyncio
 import logging
-from dotenv import load_dotenv
+import random
+import requests
+from bs4 import BeautifulSoup
 from fastapi import FastAPI, Request
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+)
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from playwright.async_api import async_playwright
 import uvicorn
 
-# --------------------------
-# 🔧 CONFIGURAÇÕES INICIAIS
-# --------------------------
-load_dotenv()
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+# ==============================
+# CONFIGURAÇÕES
+# ==============================
+TOKEN = os.getenv("BOT_TOKEN")  # seu token do BotFather
 PORT = int(os.getenv("PORT", 8080))
-WEBHOOK_URL = f"https://{os.getenv('RAILWAY_STATIC_URL')}/webhook/{BOT_TOKEN}"
+AFILIADO_TAG = "seu_nome_aqui-20"  # Substitua pela sua tag de afiliado Amazon!
 
-app = Application.builder().token(BOT_TOKEN).build()
+# Configurações de log
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# ==============================
+# APP TELEGRAM E FASTAPI
+# ==============================
+app = Application.builder().token(TOKEN).build()
 scheduler = AsyncIOScheduler()
 webapp = FastAPI()
 
-# --------------------------------
-# 🔍 BUSCAR OFERTAS NA AMAZON
-# --------------------------------
-async def buscar_ofertas_filtradas(limit=4):
-    categorias = [
-        "eletronicos", "eletrodomesticos",
-        "ferramentas", "pecas-de-computador", "notebooks"
-    ]
-    ofertas = []
+# ==============================
+# SCRAPER AMAZON (rápido e leve)
+# ==============================
+CATEGORIAS = {
+    "eletronicos": "https://www.amazon.com.br/s?i=electronics",
+    "eletrodomesticos": "https://www.amazon.com.br/s?i=appliances",
+    "ferramentas": "https://www.amazon.com.br/s?i=tools",
+    "informatica": "https://www.amazon.com.br/s?i=computers"
+}
 
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
+def buscar_ofertas_amazon(limit=5):
+    categoria = random.choice(list(CATEGORIAS.keys()))
+    url = CATEGORIAS[categoria]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/118.0.0.0 Safari/537.36"
+    }
 
-            for categoria in categorias:
-                url = f"https://www.amazon.com.br/s?k={categoria}&s=featured-rank"
-                logging.info(f"🔎 Buscando ofertas na categoria: {categoria}")
-                await page.goto(url, timeout=90000)
-                await page.wait_for_selector("div.s-main-slot", timeout=60000)
-                await asyncio.sleep(3)
+    response = requests.get(url, headers=headers, timeout=20)
+    soup = BeautifulSoup(response.text, "html.parser")
 
-                produtos = await page.query_selector_all("div.s-result-item[data-asin]")
-                logging.info(f"✅ {len(produtos)} produtos encontrados em {categoria}")
+    produtos = []
+    for item in soup.select("div.s-main-slot div[data-asin]")[:limit]:
+        asin = item.get("data-asin")
+        titulo_tag = item.select_one("h2 a span")
+        preco_tag = item.select_one("span.a-price-whole")
 
-                for produto in produtos[:limit]:
-                    nome = await produto.inner_text()
-                    asin = await produto.get_attribute("data-asin")
-                    if asin:
-                        link = f"https://www.amazon.com.br/dp/{asin}?tag=seuIDAfiliado-20"
-                        ofertas.append((nome[:120], link))
-
-            await browser.close()
-
-    except Exception as e:
-        logging.error(f"❌ Erro ao buscar ofertas: {e}")
-
-    return ofertas
+        if asin and titulo_tag and preco_tag:
+            produtos.append({
+                "titulo": titulo_tag.text.strip(),
+                "preco": f"R$ {preco_tag.text.strip()}",
+                "url": f"https://www.amazon.com.br/dp/{asin}?tag={AFILIADO_TAG}"
+            })
+    return produtos
 
 
-# --------------------------------
-# 🤖 FUNÇÃO DE POSTAGEM
-# --------------------------------
-async def postar_ofertas(chat_id: int):
-    try:
-        logging.info(f"🚀 Iniciando ciclo de postagem para o chat {chat_id}")
-        ofertas = await buscar_ofertas_filtradas(limit=4)
-
-        if not ofertas:
-            logging.warning("⚠️ Nenhuma oferta encontrada.")
-            await app.bot.send_message(chat_id=chat_id, text="😕 Nenhuma oferta encontrada no momento.")
-            return
-
-        await app.bot.send_message(chat_id=chat_id, text=f"🔄 {len(ofertas)} novas ofertas encontradas! Publicando...")
-
-        for nome, link in ofertas:
-            msg = f"🛒 *{nome}*\n👉 [Ver na Amazon]({link})"
-            await app.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
-            logging.info(f"📤 Enviado: {nome} → {link}")
-            await asyncio.sleep(5)
-
-        logging.info(f"✅ Ciclo de postagem finalizado para o chat {chat_id}")
-
-    except Exception as e:
-        logging.error(f"❌ Erro ao postar ofertas: {e}")
-        await app.bot.send_message(chat_id=chat_id, text=f"❌ Erro ao buscar ofertas: {e}")
-
-
-# --------------------------------
-# ⚙️ COMANDOS DO TELEGRAM
-# --------------------------------
+# ==============================
+# FUNÇÕES DO BOT
+# ==============================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Olá! Sou seu bot de ofertas da Amazon. Use /start_posting para começar as postagens automáticas.")
+    await update.message.reply_text(
+        "👋 Olá! Eu sou o bot de ofertas da Amazon.\n\n"
+        "Use /start_posting para começar a postar automaticamente as ofertas aqui!\n"
+        "Use /stop_posting para parar de postar ofertas."
+    )
 
-async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat_id
-    existing_job = scheduler.get_job(f"posting-{chat_id}")
+async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
+    chat_id = context.job.chat_id
+    logger.info(f"🛍️ Buscando novas ofertas para {chat_id}...")
+    ofertas = buscar_ofertas_amazon(limit=4)
 
-    if existing_job:
-        await update.message.reply_text("⚠️ As postagens já estão ativas neste chat.")
+    if not ofertas:
+        await context.bot.send_message(chat_id, "⚠️ Nenhuma oferta encontrada no momento.")
         return
 
-    scheduler.add_job(postar_ofertas, "interval", minutes=3, args=[chat_id], id=f"posting-{chat_id}")
-    await update.message.reply_text("✅ Postagens automáticas iniciadas! Vou enviar novas ofertas a cada 3 minutos.")
-    logging.info(f"✅ Novo job de postagem criado para o chat {chat_id}")
+    for oferta in ofertas:
+        msg = f"🔥 *{oferta['titulo']}*\n💰 {oferta['preco']}\n👉 [Ver na Amazon]({oferta['url']})"
+        await context.bot.send_message(chat_id, msg, parse_mode="Markdown")
+
+async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+
+    existing_job = scheduler.get_job(f"posting-{chat_id}")
+    if existing_job:
+        await update.message.reply_text("⚠️ Já estou postando ofertas aqui!")
+        return
+
+    scheduler.add_job(postar_ofertas, "interval", minutes=3, id=f"posting-{chat_id}", args=[context])
+    await update.message.reply_text("✅ Postagens automáticas iniciadas! 🔥")
+    logger.info(f"✅ Novo job de postagem criado para o chat {chat_id}")
 
 async def stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat_id
+    chat_id = update.effective_chat.id
     job = scheduler.get_job(f"posting-{chat_id}")
-
     if job:
-        scheduler.remove_job(f"posting-{chat_id}")
-        await update.message.reply_text("🛑 Postagens automáticas interrompidas.")
-        logging.info(f"🛑 Job removido para o chat {chat_id}")
+        scheduler.remove_job(job.id)
+        await update.message.reply_text("🛑 Postagens automáticas paradas!")
+        logger.info(f"🛑 Postagens paradas para {chat_id}")
     else:
-        await update.message.reply_text("⚠️ Nenhum job ativo para este chat.")
+        await update.message.reply_text("⚠️ Nenhum job ativo para parar.")
 
 
-# --------------------------------
-# 🌐 CONFIGURAÇÃO DO WEBHOOK
-# --------------------------------
-@webapp.post(f"/webhook/{BOT_TOKEN}")
-async def telegram_webhook(request: Request):
+# ==============================
+# WEBHOOK (para Railway)
+# ==============================
+@webapp.post("/webhook/{token}")
+async def webhook(request: Request, token: str):
+    if token != TOKEN:
+        return {"error": "Token inválido"}
+    data = await request.json()
+    update = Update.de_json(data, app.bot)
     try:
-        data = await request.json()
-        update = Update.de_json(data, app.bot)
+        await app.initialize()
         await app.process_update(update)
     except Exception as e:
-        logging.error(f"Erro no webhook: {e}")
+        logger.error(f"Erro no webhook: {e}")
     return {"status": "ok"}
 
 
-# --------------------------------
-# 🚀 INICIALIZAÇÃO DO BOT
-# --------------------------------
+# ==============================
+# MAIN
+# ==============================
 async def main():
-    logging.info("🚀 Iniciando bot...")
+    logger.info("🚀 Iniciando bot...")
     scheduler.start()
 
-    await app.bot.delete_webhook()
-    await app.bot.set_webhook(WEBHOOK_URL)
-    logging.info(f"🌐 Webhook configurado em: {WEBHOOK_URL}")
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("start_posting", start_posting))
+    app.add_handler(CommandHandler("stop_posting", stop_posting))
 
-    # Executa o servidor FastAPI dentro do mesmo loop
+    await app.bot.delete_webhook()
+    webhook_url = f"https://amazon-ofertas-api.up.railway.app/webhook/{TOKEN}"
+    await app.bot.set_webhook(webhook_url)
+    logger.info(f"🌐 Webhook configurado em: {webhook_url}")
+
+    # Executa FastAPI sem bloquear asyncio
     config = uvicorn.Config(webapp, host="0.0.0.0", port=PORT, log_level="info")
     server = uvicorn.Server(config)
     await server.serve()
 
-
 if __name__ == "__main__":
-    asyncio.get_event_loop().run_until_complete(main())
+    asyncio.run(main())

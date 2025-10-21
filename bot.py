@@ -10,7 +10,7 @@ import uvicorn
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-from amazon_scraper import buscar_ofertas_por_categoria
+from amazon_scraper import buscar_ofertas, buscar_ofertas_por_categoria
 
 # ===== CONFIGURAÇÕES =====
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -45,10 +45,16 @@ async def buscar_ofertas_filtradas(limit: int = 6) -> List[Dict[str, str]]:
 
     logging.info(f"🔎 Buscando ofertas na categoria: {categoria}")
 
-    produtos = await buscar_ofertas_por_categoria(categoria, limit=limit * 2)
+    produtos = await buscar_ofertas_por_categoria(categoria, limit=limit * 3)
 
     if not produtos:
-        logging.info(f"⚠️ Nenhum produto encontrado na categoria {categoria}")
+        logging.info(
+            f"⚠️ Nenhum produto encontrado na categoria {categoria}. Tentando Goldbox."
+        )
+        produtos = await buscar_ofertas(limit=limit * 3)
+
+    if not produtos:
+        logging.info("⚠️ Nenhuma oferta encontrada nem na busca nem no Goldbox")
         return []
 
     resultados: List[Dict[str, str]] = []

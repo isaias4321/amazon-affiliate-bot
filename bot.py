@@ -1,79 +1,89 @@
 import os
 import asyncio
 import logging
-import random
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request
+from telegram import Update
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+)
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from playwright.async_api import async_playwright
-import uvicorn
 
-# ===== CONFIGURAÇÕES =====
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# --------------------------
+# 🔧 CONFIGURAÇÕES INICIAIS
+# --------------------------
+load_dotenv()
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-AFFILIATE_TAG = os.getenv("AMAZON_TAG", "SEU_ID_AFILIADO_AQUI")
 PORT = int(os.getenv("PORT", 8080))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Exemplo: https://seuapp.up.railway.app
+WEBHOOK_URL = f"https://{os.getenv('RAILWAY_STATIC_URL')}/webhook/{BOT_TOKEN}"
 
-webapp = FastAPI()
+app = Application.builder().token(BOT_TOKEN).build()
 scheduler = AsyncIOScheduler()
-posting_jobs = {}
+webapp = FastAPI()
 
-# ===== FUNÇÃO PARA BUSCAR OFERTAS =====
-async def buscar_ofertas_filtradas(limit=6):
+# --------------------------------
+# 🔍 BUSCAR OFERTAS NA AMAZON
+# --------------------------------
+async def buscar_ofertas_filtradas(limit=4):
     categorias = [
-        "eletrônicos", "eletrodomésticos", "ferramentas",
-        "peças de computadores", "notebooks"
+        "eletronicos", "eletrodomesticos",
+        "ferramentas", "pecas-de-computador", "notebooks"
     ]
-    categoria = random.choice(categorias)
-    url = f"https://www.amazon.com.br/s?k={categoria.replace(' ', '+')}"
 
-    logging.info(f"🔎 Buscando ofertas na categoria: {categoria}")
+    ofertas = []
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.goto(url, timeout=90000)
-        await asyncio.sleep(5)
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
 
-        for _ in range(3):  # scroll para carregar mais resultados
-            await page.mouse.wheel(0, 3000)
-            await asyncio.sleep(2)
+            for categoria in categorias:
+                url = f"https://www.amazon.com.br/s?k={categoria}&s=featured-rank"
+                logging.info(f"🔎 Buscando ofertas na categoria: {categoria}")
+                await page.goto(url, timeout=90000)
+                await page.wait_for_selector("div.s-main-slot", timeout=60000)
+                await asyncio.sleep(3)
 
-        produtos = await page.query_selector_all("div.s-result-item")
-        resultados = []
+                produtos = await page.query_selector_all("div.s-result-item[data-asin]")
+                logging.info(f"✅ {len(produtos)} produtos encontrados em {categoria}")
 
-        for produto in produtos[:limit]:
-            titulo = await produto.query_selector("h2 a span")
-            link = await produto.query_selector("h2 a")
+                for produto in produtos[:limit]:
+                    nome = await produto.inner_text()
+                    asin = await produto.get_attribute("data-asin")
+                    if asin:
+                        link = f"https://www.amazon.com.br/dp/{asin}?tag=seuIDAfiliado-20"
+                        ofertas.append((nome[:120], link))
 
-            if titulo and link:
-                nome = (await titulo.inner_text()).strip()
-                url_produto = (await link.get_attribute("href")).strip()
-                if url_produto.startswith("/"):
-                    url_produto = "https://www.amazon.com.br" + url_produto
-                if "tag=" not in url_produto:
-                    separador = "&" if "?" in url_produto else "?"
-                    url_produto += f"{separador}tag={AFFILIATE_TAG}"
+            await browser.close()
 
-                resultados.append((nome, url_produto))
+    except Exception as e:
+        logging.error(f"❌ Erro ao buscar ofertas: {e}")
 
-        await browser.close()
-        logging.info(f"✅ {len(resultados)} produtos encontrados em {categoria}")
-        return resultados
+    return ofertas
 
-# ===== POSTAGEM AUTOMÁTICA =====
+
+# --------------------------------
+# 🤖 FUNÇÃO DE POSTAGEM
+# --------------------------------
 async def postar_ofertas(chat_id: int):
     try:
+        logging.info(f"🚀 Iniciando ciclo de postagem para o chat {chat_id}")
         ofertas = await buscar_ofertas_filtradas(limit=4)
 
-        if not ofertas:
+        if not ofertas or len(ofertas) == 0:
+            logging.warning("⚠️ Nenhuma oferta encontrada.")
             await app.bot.send_message(chat_id=chat_id, text="😕 Nenhuma oferta encontrada no momento.")
             return
 
-        await app.bot.send_message(chat_id=chat_id, text="🔄 Buscando novas ofertas...")
+        await app.bot.send_message(chat_id=chat_id, text=f"🔄 {len(ofertas)} novas ofertas encontradas! Publicando...")
 
         for nome, link in ofertas:
             msg = f"🛒 *{nome}*\n👉 [Ver na Amazon]({link})"
@@ -81,88 +91,68 @@ async def postar_ofertas(chat_id: int):
             logging.info(f"📤 Enviado: {nome} → {link}")
             await asyncio.sleep(5)
 
-    except Exception as e:
-        logging.error(f"Erro ao postar ofertas: {e}")
+        logging.info(f"✅ Ciclo de postagem finalizado para o chat {chat_id}")
 
-# ===== COMANDOS DO BOT =====
+    except Exception as e:
+        logging.error(f"❌ Erro ao postar ofertas: {e}")
+        await app.bot.send_message(chat_id=chat_id, text=f"❌ Erro ao buscar ofertas: {e}")
+
+
+# --------------------------------
+# ⚙️ COMANDOS DO TELEGRAM
+# --------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Olá! Use /start_posting para começar e /stop_posting para parar.")
+    await update.message.reply_text("👋 Olá! Sou seu bot de ofertas da Amazon. Use /start_posting para começar as postagens automáticas.")
 
 async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
-    job_id = f"posting-{chat_id}"
+    existing_job = scheduler.get_job(f"posting-{chat_id}")
 
-    existing_job = scheduler.get_job(job_id)
     if existing_job:
-        scheduler.remove_job(job_id)
-        logging.info(f"🧹 Job antigo removido ({job_id})")
+        await update.message.reply_text("⚠️ As postagens já estão ativas neste chat.")
+        return
 
-    job = scheduler.add_job(postar_ofertas, "interval", minutes=3, args=[chat_id], id=job_id)
-    posting_jobs[chat_id] = job
-
-    await update.message.reply_text("🚀 Postagens automáticas iniciadas!")
+    scheduler.add_job(postar_ofertas, "interval", minutes=3, args=[chat_id], id=f"posting-{chat_id}")
+    await update.message.reply_text("✅ Postagens automáticas iniciadas! Vou enviar novas ofertas a cada 3 minutos.")
     logging.info(f"✅ Novo job de postagem criado para o chat {chat_id}")
 
 async def stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
-    job_id = f"posting-{chat_id}"
+    job = scheduler.get_job(f"posting-{chat_id}")
 
-    existing_job = scheduler.get_job(job_id)
-    if existing_job:
-        scheduler.remove_job(job_id)
-        posting_jobs.pop(chat_id, None)
-        await update.message.reply_text("🛑 Postagens automáticas pausadas.")
-        logging.info(f"🧩 Job removido ({job_id})")
+    if job:
+        scheduler.remove_job(f"posting-{chat_id}")
+        await update.message.reply_text("🛑 Postagens automáticas interrompidas.")
+        logging.info(f"🛑 Job removido para o chat {chat_id}")
     else:
-        await update.message.reply_text("ℹ️ Nenhuma postagem ativa no momento.")
+        await update.message.reply_text("⚠️ Nenhum job ativo para este chat.")
 
-# ===== WEBHOOK FASTAPI =====
-@webapp.post("/webhook/{token}")
-async def webhook(request: Request, token: str):
-    if token != BOT_TOKEN:
-        return {"status": "unauthorized"}
-
+# --------------------------------
+# 🌐 CONFIGURAÇÃO DO WEBHOOK
+# --------------------------------
+@webapp.post(f"/webhook/{BOT_TOKEN}")
+async def telegram_webhook(request: Request):
     try:
         data = await request.json()
         update = Update.de_json(data, app.bot)
         await app.process_update(update)
-        return {"status": "ok"}
     except Exception as e:
         logging.error(f"Erro no webhook: {e}")
-        return {"status": "error", "detail": str(e)}
+    return {"status": "ok"}
 
-# ===== INICIALIZAÇÃO =====
+# --------------------------------
+# 🚀 INICIALIZAÇÃO DO BOT
+# --------------------------------
 async def main():
-    global app
     logging.info("🚀 Iniciando bot...")
-
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("start_posting", start_posting))
-    app.add_handler(CommandHandler("stop_posting", stop_posting))
-
     scheduler.start()
 
-    await app.initialize()
-    await app.start()
+    await app.bot.delete_webhook()
+    await app.bot.set_webhook(WEBHOOK_URL)
+    logging.info(f"🌐 Webhook configurado em: {WEBHOOK_URL}")
 
-    if WEBHOOK_URL:
-        webhook_path = f"/webhook/{BOT_TOKEN}"
-        webhook_full_url = f"{WEBHOOK_URL}{webhook_path}"
-
-        await app.bot.delete_webhook()
-        await app.bot.set_webhook(webhook_full_url)
-        logging.info(f"🌐 Webhook configurado em: {webhook_full_url}")
-
-        config = uvicorn.Config(webapp, host="0.0.0.0", port=PORT, log_level="info")
-        server = uvicorn.Server(config)
-        await server.serve()
-
-        await app.stop()
-        await app.shutdown()
-    else:
-        logging.info("🤖 Rodando em modo polling local...")
-        await app.run_polling()
+    import uvicorn
+    uvicorn.run(webapp, host="0.0.0.0", port=PORT)
 
 if __name__ == "__main__":
     asyncio.run(main())

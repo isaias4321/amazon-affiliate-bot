@@ -1,184 +1,301 @@
 import os
+import re
+import random
 import asyncio
 import logging
-import random
-import requests
-from bs4 import BeautifulSoup
-from fastapi import FastAPI, Request
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-import uvicorn
+from typing import Optional, Dict, Any, List
 
-# ==============================
-# CONFIGURAÇÕES
-# ==============================
-TOKEN = os.getenv("BOT_TOKEN")  # Token do BotFather
-PORT = int(os.getenv("PORT", 8080))
-AFILIADO_TAG = "seunome-20"  # Coloque sua tag de afiliado Amazon aqui!
+import aiohttp
+from telegram import Update, InputMediaPhoto
+from telegram.constants import ParseMode
+from telegram.ext import (
+    Application, ApplicationBuilder, CommandHandler, ContextTypes
+)
 
-# Configuração de logs
-logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
-logger = logging.getLogger(__name__)
+# ===================== CONFIG =====================
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+VALUE_SERP_API_KEY = os.getenv("VALUE_SERP_API_KEY", "")
+AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "")  # ex.: seu-20
+BASE_URL = os.getenv("BASE_URL", "").rstrip("/")  # ex.: https://seuapp.up.railway.app
+PORT = int(os.getenv("PORT", "8080"))
 
-# Inicializações principais
-app = Application.builder().token(TOKEN).build()
-scheduler = AsyncIOScheduler()
-webapp = FastAPI()
+# 1 oferta por ciclo / 3 minutos (ajuste se quiser)
+CYCLE_MINUTES = int(os.getenv("CYCLE_MINUTES", "3"))
 
-# ==============================
-# CATEGORIAS AMAZON
-# ==============================
-CATEGORIAS = {
-    "eletronicos": "https://www.amazon.com.br/s?i=electronics",
-    "eletrodomesticos": "https://www.amazon.com.br/s?i=appliances",
-    "ferramentas": "https://www.amazon.com.br/s?i=tools",
-    "informatica": "https://www.amazon.com.br/s?i=computers"
-}
+# categorias fixas pedidas
+CATEGORIES = [
+    "smartphone Amazon",
+    "notebook Amazon",
+    "periféricos gamer Amazon",
+    "eletrodomésticos Amazon",
+    "ferramentas Amazon",
+]
+
+# regex pra link amazon /dp/ ou /gp/
+AMAZON_LINK_RE = re.compile(r"https?://(?:www\.)?amazon\.com\.br/(?:gp/[^/?#]+|dp/[^/?#]+)[^\s]*", re.IGNORECASE)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger("dealbot")
+
+# memória simples em runtime
+JOBS: Dict[int, str] = {}         # chat_id -> job name
+CATEGORY_IDX: Dict[int, int] = {} # chat_id -> qual categoria usar no próximo ciclo
 
 
-# ==============================
-# FUNÇÃO PARA BUSCAR OFERTAS
-# ==============================
-def buscar_ofertas_amazon(limit=5):
-    categoria = random.choice(list(CATEGORIAS.keys()))
-    url = CATEGORIAS[categoria]
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/118.0.0.0 Safari/537.36"
-        )
-    }
+# ===================== HELPERS =====================
 
+def add_affiliate_tag(url: str, tag: str) -> str:
+    """Adiciona ?tag= ou &tag= ao link amazon, se não existir."""
+    if not tag:
+        return url
+    if "tag=" in url:
+        return url
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}tag={tag}"
+
+def clean_text(s: str) -> str:
+    return re.sub(r"\s+", " ", s or "").strip()
+
+def br_price_to_float(p: str) -> Optional[float]:
+    """Converte 'R$ 1.234,56' -> 1234.56"""
+    if not p:
+        return None
+    txt = p.replace("R$", "").replace(" ", "")
+    txt = txt.replace(".", "").replace(",", ".")
     try:
-        response = requests.get(url, headers=headers, timeout=20)
-        soup = BeautifulSoup(response.text, "html.parser")
+        return float(txt)
+    except:
+        return None
 
-        produtos = []
-        for item in soup.select("div.s-main-slot div[data-asin]")[:limit]:
-            asin = item.get("data-asin")
-            titulo_tag = item.select_one("h2 a span")
-            preco_tag = item.select_one("span.a-price-whole")
+def build_caption(title: str, price: Optional[str], discount: Optional[str]) -> str:
+    parts = [f"*{title}*"]
+    if price:
+        parts.append(f"💰 Preço: *{price}*")
+    if discount:
+        parts.append(f"🔻 Desconto: *{discount}*")
+    return "\n".join(parts)
 
-            if asin and titulo_tag and preco_tag:
-                produtos.append({
-                    "titulo": titulo_tag.text.strip(),
-                    "preco": f"R$ {preco_tag.text.strip()}",
-                    "url": f"https://www.amazon.com.br/dp/{asin}?tag={AFILIADO_TAG}"
-                })
-        return produtos
+async def valueserp_shopping_search(session: aiohttp.ClientSession, query: str) -> Dict[str, Any]:
+    """
+    Usa o engine Google Shopping do ValueSERP para trazer resultados com preço/imagem.
+    Filtra por amazon.com.br no servidor (usando restrições no q e depois no parse).
+    """
+    params = {
+        "api_key": VALUE_SERP_API_KEY,
+        "engine": "google_shopping",
+        "google_domain": "google.com.br",
+        "gl": "br",
+        "hl": "pt-br",
+        "q": f"{query} site:amazon.com.br",
+        "num": 10
+    }
+    url = "https://api.valueserp.com/search"
+    async with session.get(url, params=params, timeout=30) as resp:
+        if resp.status != 200:
+            raise RuntimeError(f"ValueSERP HTTP {resp.status}")
+        return await resp.json()
 
-    except Exception as e:
-        logger.error(f"Erro ao buscar ofertas: {e}")
-        return []
+def pick_amazon_item(shopping_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = shopping_json.get("shopping_results", []) or []
+    # prioriza fonte amazon e que tenha preço
+    amazon_like = [x for x in items if "amazon.com.br" in (x.get("source", "") or "").lower()]
+    use_list = amazon_like or items
+    if not use_list:
+        return None
+    # tenta pegar algo com imagem e preço
+    use_list = [x for x in use_list if x.get("price")]
+    if not use_list:
+        return None
+    # escolhe um qualquer (poderíamos randomizar)
+    return random.choice(use_list)
+
+def extract_price_and_discount(item: Dict[str, Any]) -> (Optional[str], Optional[str]):
+    # ValueSERP shopping geralmente traz 'price' (string), 'extracted_price' (float) e às vezes 'extracted_previous_price'
+    price_str = item.get("price")
+    discount_str = None
+
+    extracted_price = item.get("extracted_price")
+    prev = item.get("extracted_previous_price")
+    if extracted_price and prev and prev > extracted_price:
+        # calcula % off
+        off = int(round(100 * (prev - extracted_price) / prev))
+        discount_str = f"-{off}%"
+
+    return price_str, discount_str
+
+def ensure_amazon_link(item: Dict[str, Any]) -> Optional[str]:
+    # shopping result costuma ter 'link' final (às vezes é tracking do Google)
+    link = item.get("link") or ""
+    m = AMAZON_LINK_RE.search(link)
+    if m:
+        return m.group(0)
+    # fallback: se não achou, retorna o link mesmo assim (às vezes já é direto)
+    return link or None
 
 
-# ==============================
-# FUNÇÕES DO BOT
-# ==============================
+# ===================== TELEGRAM HANDLERS =====================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Olá! Eu sou o bot de ofertas da Amazon.\n\n"
-        "Comandos disponíveis:\n"
-        "• /start_posting → começar postagens automáticas\n"
-        "• /stop_posting → parar postagens automáticas\n"
+        "👋 Olá! Use:\n"
+        "/start_posting – começar a postar 1 oferta a cada ciclo\n"
+        "/stop_posting – parar de postar\n"
+        "/status – ver status do job atual\n\n"
+        f"Categorias: {', '.join(CATEGORIES)}\n"
+        f"Ciclo: {CYCLE_MINUTES} min\n"
     )
 
-
-async def postar_ofertas(chat_id: str):
-    """Função que envia ofertas automaticamente."""
-    logger.info(f"🛍️ Buscando novas ofertas para {chat_id}...")
-
-    ofertas = buscar_ofertas_amazon(limit=4)
-    if not ofertas:
-        try:
-            await app.bot.send_message(chat_id, "⚠️ Nenhuma oferta encontrada no momento.")
-        except Exception as e:
-            logger.error(f"Erro ao enviar mensagem: {e}")
-        return
-
-    for oferta in ofertas:
-        msg = f"🔥 *{oferta['titulo']}*\n💰 {oferta['preco']}\n👉 [Ver na Amazon]({oferta['url']})"
-        try:
-            await app.bot.send_message(chat_id, msg, parse_mode="Markdown")
-        except Exception as e:
-            logger.error(f"Erro ao enviar mensagem para {chat_id}: {e}")
-
-
-async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Inicia postagens automáticas."""
-    chat_id = str(update.effective_chat.id)
-
-    existing_job = scheduler.get_job(f"posting-{chat_id}")
-    if existing_job:
-        await update.message.reply_text("⚠️ Já estou postando ofertas aqui!")
-        return
-
-    scheduler.add_job(
-        postar_ofertas,
-        trigger="interval",
-        minutes=3,
-        id=f"posting-{chat_id}",
-        args=[chat_id],
-        replace_existing=True,
-    )
-
-    await update.message.reply_text("✅ Postagens automáticas iniciadas! 🔥")
-    logger.info(f"✅ Novo job de postagem criado para o chat {chat_id}")
-
+async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    job_name = JOBS.get(chat_id)
+    idx = CATEGORY_IDX.get(chat_id, 0)
+    if job_name:
+        await update.message.reply_text(
+            f"✅ Postando a cada {CYCLE_MINUTES} min.\n"
+            f"Próxima categoria: {CATEGORIES[idx % len(CATEGORIES)]}\n"
+            f"Job: {job_name}"
+        )
+    else:
+        await update.message.reply_text("⏸️ Nenhum job ativo neste chat. Use /start_posting")
 
 async def stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Para as postagens automáticas."""
-    chat_id = str(update.effective_chat.id)
-    job = scheduler.get_job(f"posting-{chat_id}")
-    if job:
-        scheduler.remove_job(job.id)
-        await update.message.reply_text("🛑 Postagens automáticas paradas!")
-        logger.info(f"🛑 Postagens paradas para {chat_id}")
+    chat_id = update.effective_chat.id
+    job_name = JOBS.pop(chat_id, None)
+    if job_name:
+        context.application.job_queue.get_jobs_by_name(job_name)
+        for j in context.application.job_queue.get_jobs_by_name(job_name):
+            j.schedule_removal()
+        await update.message.reply_text("🛑 Job parado.")
     else:
-        await update.message.reply_text("⚠️ Nenhuma postagem ativa para parar.")
+        await update.message.reply_text("⚠️ Não havia job ativo.")
 
+async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not VALUE_SERP_API_KEY:
+        await update.message.reply_text("❌ Configure VALUE_SERP_API_KEY para buscar ofertas.")
+        return
 
-# ==============================
-# WEBHOOK (para Railway)
-# ==============================
-@webapp.post("/webhook/{token}")
-async def webhook(request: Request, token: str):
-    if token != TOKEN:
-        return {"error": "Token inválido"}
+    chat_id = update.effective_chat.id
+    # se já existe, apaga
+    old_name = JOBS.get(chat_id)
+    if old_name:
+        for j in context.application.job_queue.get_jobs_by_name(old_name):
+            j.schedule_removal()
 
-    data = await request.json()
-    update = Update.de_json(data, app.bot)
+    # reseta o índice de categoria se nunca usado
+    CATEGORY_IDX.setdefault(chat_id, 0)
+
+    job_name = f"posting-{chat_id}"
+    context.application.job_queue.run_repeating(
+        callback=postar_oferta_uma_unidade,
+        interval=CYCLE_MINUTES * 60,
+        first=5,  # primeiro disparo em 5s
+        name=job_name,
+        data={"chat_id": chat_id},
+    )
+    JOBS[chat_id] = job_name
+    await update.message.reply_text(
+        f"✅ Começando a postar 1 oferta a cada {CYCLE_MINUTES} min.\n"
+        f"Categorias em rotação: {', '.join(CATEGORIES)}"
+    )
+
+async def postar_oferta_uma_unidade(context: ContextTypes.DEFAULT_TYPE):
+    """JobQueue callback: posta exatamente 1 oferta por ciclo."""
+    data = context.job.data or {}
+    chat_id: int = data.get("chat_id")
+    if not chat_id:
+        logger.error("Job sem chat_id no data.")
+        return
+
+    idx = CATEGORY_IDX.get(chat_id, 0)
+    query = CATEGORIES[idx % len(CATEGORIES)]
+    CATEGORY_IDX[chat_id] = (idx + 1) % len(CATEGORIES)
+
     try:
-        await app.initialize()
-        await app.process_update(update)
+        async with aiohttp.ClientSession() as session:
+            js = await valueserp_shopping_search(session, query)
+            item = pick_amazon_item(js)
+            if not item:
+                await context.bot.send_message(chat_id, text=f"⚠️ Não achei ofertas para: {query}")
+                return
+
+            title = clean_text(item.get("title"))
+            price_str, discount_str = extract_price_and_discount(item)
+            link = ensure_amazon_link(item)
+            if not link:
+                await context.bot.send_message(chat_id, text=f"⚠️ Sem link válido para: {title}")
+                return
+
+            link = add_affiliate_tag(link, AFFILIATE_TAG)
+
+            # imagem
+            img = item.get("thumbnail") or item.get("image")
+            caption = build_caption(title, price_str, discount_str) + f"\n\n➡️ {link}"
+
+            if img:
+                await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=img,
+                    caption=caption,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            else:
+                # sem imagem, manda só texto
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=caption,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+
+            logger.info(f"Oferta enviada ao chat {chat_id}: {title}")
+
     except Exception as e:
-        logger.error(f"Erro no webhook: {e}")
+        logger.exception("Falha ao buscar/postar oferta: %s", e)
+        await context.bot.send_message(chat_id, text=f"❌ Erro ao buscar oferta: {e}")
 
-    return {"status": "ok"}
+# ===================== WEBHOOK (Railway) =====================
 
-
-# ==============================
-# MAIN
-# ==============================
 async def main():
-    logger.info("🚀 Iniciando bot...")
-    scheduler.start()
+    if not BOT_TOKEN:
+        raise RuntimeError("Defina BOT_TOKEN")
+    if not BASE_URL:
+        raise RuntimeError("Defina BASE_URL (ex.: https://seuapp.up.railway.app)")
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("start_posting", start_posting))
-    app.add_handler(CommandHandler("stop_posting", stop_posting))
+    application: Application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    await app.bot.delete_webhook()
-    webhook_url = f"https://amazon-ofertas-api.up.railway.app/webhook/{TOKEN}"
-    await app.bot.set_webhook(webhook_url)
+    # comandos
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("status", status_cmd))
+    application.add_handler(CommandHandler("start_posting", start_posting))
+    application.add_handler(CommandHandler("stop_posting", stop_posting))
+
+    # IMPORTANTE: use o servidor de webhook nativo do PTB (sem uvicorn)
+    # Ele inicializa, seta webhook e escuta a porta do Railway.
+    webhook_path = f"/webhook/{BOT_TOKEN}"
+    webhook_url = f"{BASE_URL}{webhook_path}"
+
+    logger.info("🚀 Iniciando bot (webhook nativo PTB) ...")
+    await application.initialize()
+    await application.bot.delete_webhook(drop_pending_updates=True)
+    await application.start()
+
+    # seta webhook apontando pro Railway
+    await application.bot.set_webhook(url=webhook_url)
+
     logger.info(f"🌐 Webhook configurado em: {webhook_url}")
+    # inicia o servidor HTTP interno do PTB (aiohttp) e mantém rodando
+    await application.updater.start_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=BOT_TOKEN,
+        webhook_url=webhook_url,
+    )
 
-    config = uvicorn.Config(webapp, host="0.0.0.0", port=PORT, log_level="info")
-    server = uvicorn.Server(config)
-    await server.serve()
-
+    # bloqueia até CTRL+C / container stop
+    await application.updater.wait_until_closed()
 
 if __name__ == "__main__":
+    # executa a main async sem conflitar com outros loops
     asyncio.run(main())

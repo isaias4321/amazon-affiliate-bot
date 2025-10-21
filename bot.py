@@ -4,13 +4,10 @@ import logging
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-)
+from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from playwright.async_api import async_playwright
+import uvicorn
 
 # --------------------------
 # 🔧 CONFIGURAÇÕES INICIAIS
@@ -37,7 +34,6 @@ async def buscar_ofertas_filtradas(limit=4):
         "eletronicos", "eletrodomesticos",
         "ferramentas", "pecas-de-computador", "notebooks"
     ]
-
     ofertas = []
 
     try:
@@ -78,7 +74,7 @@ async def postar_ofertas(chat_id: int):
         logging.info(f"🚀 Iniciando ciclo de postagem para o chat {chat_id}")
         ofertas = await buscar_ofertas_filtradas(limit=4)
 
-        if not ofertas or len(ofertas) == 0:
+        if not ofertas:
             logging.warning("⚠️ Nenhuma oferta encontrada.")
             await app.bot.send_message(chat_id=chat_id, text="😕 Nenhuma oferta encontrada no momento.")
             return
@@ -127,6 +123,7 @@ async def stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("⚠️ Nenhum job ativo para este chat.")
 
+
 # --------------------------------
 # 🌐 CONFIGURAÇÃO DO WEBHOOK
 # --------------------------------
@@ -140,6 +137,7 @@ async def telegram_webhook(request: Request):
         logging.error(f"Erro no webhook: {e}")
     return {"status": "ok"}
 
+
 # --------------------------------
 # 🚀 INICIALIZAÇÃO DO BOT
 # --------------------------------
@@ -151,8 +149,11 @@ async def main():
     await app.bot.set_webhook(WEBHOOK_URL)
     logging.info(f"🌐 Webhook configurado em: {WEBHOOK_URL}")
 
-    import uvicorn
-    uvicorn.run(webapp, host="0.0.0.0", port=PORT)
+    # Executa o servidor FastAPI dentro do mesmo loop
+    config = uvicorn.Config(webapp, host="0.0.0.0", port=PORT, log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.get_event_loop().run_until_complete(main())

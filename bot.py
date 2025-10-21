@@ -2,12 +2,15 @@ import os
 import asyncio
 import logging
 import random
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from typing import Dict, List
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request
-from playwright.async_api import async_playwright
 import uvicorn
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+
+from amazon_scraper import buscar_ofertas, buscar_ofertas_por_categoria
 
 # ===== CONFIGURAÇÕES =====
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -22,47 +25,56 @@ scheduler = AsyncIOScheduler()
 posting_jobs = {}
 
 # ===== FUNÇÃO PARA BUSCAR OFERTAS =====
-async def buscar_ofertas_filtradas(limit=6):
+def _aplicar_tag_afiliado(url: str) -> str:
+    if not AFFILIATE_TAG:
+        return url
+
+    if "tag=" in url:
+        return url
+
+    separador = "&" if "?" in url else "?"
+    return f"{url}{separador}tag={AFFILIATE_TAG}"
+
+
+async def buscar_ofertas_filtradas(limit: int = 6) -> List[Dict[str, str]]:
     categorias = [
         "eletrônicos", "eletrodomésticos", "ferramentas",
         "peças de computadores", "notebooks"
     ]
     categoria = random.choice(categorias)
-    url = f"https://www.amazon.com.br/s?k={categoria.replace(' ', '+')}"
 
     logging.info(f"🔎 Buscando ofertas na categoria: {categoria}")
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.goto(url, timeout=90000)
-        await asyncio.sleep(5)
+    produtos = await buscar_ofertas_por_categoria(categoria, limit=limit * 3)
 
-        for _ in range(3):  # scroll para carregar mais resultados
-            await page.mouse.wheel(0, 3000)
-            await asyncio.sleep(2)
+    if not produtos:
+        logging.info(
+            f"⚠️ Nenhum produto encontrado na categoria {categoria}. Tentando Goldbox."
+        )
+        produtos = await buscar_ofertas(limit=limit * 3)
 
-        produtos = await page.query_selector_all("div.s-result-item")
-        resultados = []
+    if not produtos:
+        logging.info("⚠️ Nenhuma oferta encontrada nem na busca nem no Goldbox")
+        return []
 
-        for produto in produtos[:limit]:
-            titulo = await produto.query_selector("h2 a span")
-            link = await produto.query_selector("h2 a")
+    resultados: List[Dict[str, str]] = []
+    for produto in produtos:
+        link = _aplicar_tag_afiliado(produto["link"])
 
-            if titulo and link:
-                nome = (await titulo.inner_text()).strip()
-                url_produto = (await link.get_attribute("href")).strip()
-                if url_produto.startswith("/"):
-                    url_produto = "https://www.amazon.com.br" + url_produto
-                if "tag=" not in url_produto:
-                    separador = "&" if "?" in url_produto else "?"
-                    url_produto += f"{separador}tag={AFFILIATE_TAG}"
+        resultados.append(
+            {
+                "titulo": produto["titulo"],
+                "preco": produto.get("preco", "Ver preço"),
+                "link": link,
+                "imagem": produto.get("imagem"),
+            }
+        )
 
-                resultados.append((nome, url_produto))
+        if len(resultados) >= limit:
+            break
 
-        await browser.close()
-        logging.info(f"✅ {len(resultados)} produtos encontrados em {categoria}")
-        return resultados
+    logging.info(f"✅ {len(resultados)} produtos encontrados em {categoria}")
+    return resultados
 
 # ===== POSTAGEM AUTOMÁTICA =====
 async def postar_ofertas(chat_id: int):
@@ -75,10 +87,15 @@ async def postar_ofertas(chat_id: int):
 
         await app.bot.send_message(chat_id=chat_id, text="🔄 Buscando novas ofertas...")
 
-        for nome, link in ofertas:
-            msg = f"🛒 *{nome}*\n👉 [Ver na Amazon]({link})"
+        for oferta in ofertas:
+            preco = oferta.get("preco", "Ver preço")
+            msg = (
+                f"🛒 *{oferta['titulo']}*\n"
+                f"💰 {preco}\n"
+                f"👉 [Ver na Amazon]({oferta['link']})"
+            )
             await app.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
-            logging.info(f"📤 Enviado: {nome} → {link}")
+            logging.info("📤 Enviado: %s", oferta["titulo"])
             await asyncio.sleep(5)
 
     except Exception as e:

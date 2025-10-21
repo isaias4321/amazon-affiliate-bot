@@ -73,6 +73,8 @@ async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=chat_id, text="😕 Nenhuma oferta encontrada no momento.")
         return
 
+    await context.bot.send_message(chat_id=chat_id, text="🔄 Buscando novas ofertas...")
+
     for nome, link in ofertas:
         msg = f"🛒 *{nome}*\n👉 [Ver na Amazon]({link})"
         await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
@@ -130,6 +132,10 @@ async def main():
 
     scheduler.start()
 
+    # 🟢 Inicializa a aplicação antes de processar webhooks
+    await app.initialize()
+    await app.start()
+
     if WEBHOOK_URL:
         webhook_path = f"/webhook/{BOT_TOKEN}"
         webhook_full_url = f"{WEBHOOK_URL}{webhook_path}"
@@ -141,6 +147,10 @@ async def main():
         config = uvicorn.Config(webapp, host="0.0.0.0", port=PORT, log_level="info")
         server = uvicorn.Server(config)
         await server.serve()
+
+        # 🔴 Finaliza corretamente após o servidor parar
+        await app.stop()
+        await app.shutdown()
     else:
         logging.info("🤖 Rodando em modo polling local...")
         await app.run_polling()

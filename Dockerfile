@@ -1,36 +1,33 @@
-# Usa imagem base oficial do Python
+# Usa a imagem base oficial do Python 3.12
 FROM python:3.12-slim
 
-# Define diretório de trabalho
+# Define o diretório de trabalho
 WORKDIR /app
 
-# Instala dependências necessárias para o Playwright e Chromium
+# Copia os arquivos do projeto
+COPY . .
+
+# Atualiza pacotes e instala dependências necessárias para o Playwright/Chromium
 RUN apt-get update && apt-get install -y \
     wget gnupg ca-certificates libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
     libdrm2 libxkbcommon0 libxcomposite1 libxrandr2 libxdamage1 libxext6 \
     libxfixes3 libx11-xcb1 libasound2 libxshmfence1 xvfb fonts-liberation \
-    libappindicator3-1 xdg-utils unzip libgbm1 libpango-1.0-0 \
-    libgdk-pixbuf-xlib-2.0-0 libgtk-3-0 libxrender1 libxcb1 \
+    libappindicator3-1 xdg-utils unzip libgbm1 libpango-1.0-0 libgtk-3-0 \
+    libxrender1 libxcb1 libx11-6 libxau6 libxdmcp6 \
     && rm -rf /var/lib/apt/lists/*
-
-# Copia os arquivos de dependências
-COPY requirements.txt .
 
 # Instala dependências Python
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Instala Playwright e Chromium
-RUN playwright install --with-deps chromium || true
+# Instala o Chromium e dependências do Playwright
+RUN playwright install --with-deps chromium
 
-# Copia o restante do projeto
-COPY . .
-
-# Define variáveis padrão (podem ser sobrescritas no Railway)
-ENV PORT=8080 \
-    PYTHONUNBUFFERED=1
-
-# Expõe a porta para o Railway
+# Expõe a porta usada pelo webhook (necessário para Railway)
 EXPOSE 8080
 
-# Comando para iniciar o bot
+# Define variáveis de ambiente padrão
+ENV PYTHONUNBUFFERED=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
+
+# Comando padrão para iniciar o bot
 CMD ["python", "bot.py"]

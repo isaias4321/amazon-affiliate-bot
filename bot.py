@@ -21,7 +21,7 @@ webapp = FastAPI()
 scheduler = AsyncIOScheduler()
 posting_jobs = {}
 
-# ===== BUSCAR OFERTAS =====
+# ===== FUNÇÃO PARA BUSCAR OFERTAS =====
 async def buscar_ofertas_filtradas(limit=6):
     categorias = [
         "eletrônicos", "eletrodomésticos", "ferramentas",
@@ -38,8 +38,7 @@ async def buscar_ofertas_filtradas(limit=6):
         await page.goto(url, timeout=90000)
         await asyncio.sleep(5)
 
-        # Scroll para carregar resultados
-        for _ in range(3):
+        for _ in range(3):  # scroll para carregar mais resultados
             await page.mouse.wheel(0, 3000)
             await asyncio.sleep(2)
 
@@ -65,7 +64,7 @@ async def buscar_ofertas_filtradas(limit=6):
         logging.info(f"✅ {len(resultados)} produtos encontrados em {categoria}")
         return resultados
 
-# ===== POSTAGENS =====
+# ===== POSTAGEM AUTOMÁTICA =====
 async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
     ofertas = await buscar_ofertas_filtradas(limit=4)
@@ -80,7 +79,7 @@ async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
         logging.info(f"📤 Enviado: {nome} → {link}")
         await asyncio.sleep(5)
 
-# ===== COMANDOS =====
+# ===== COMANDOS DO BOT =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 Olá! Use /start_posting para começar e /stop_posting para parar.")
 
@@ -112,7 +111,8 @@ async def webhook(request: Request, token: str):
 
     try:
         data = await request.json()
-        await app.update_queue.put(data)
+        update = Update.de_json(data, app.bot)
+        await app.process_update(update)
         return {"status": "ok"}
     except Exception as e:
         logging.error(f"Erro no webhook: {e}")
@@ -124,7 +124,6 @@ async def main():
     logging.info("🚀 Iniciando bot...")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("start_posting", start_posting))
     app.add_handler(CommandHandler("stop_posting", stop_posting))
@@ -139,7 +138,6 @@ async def main():
         await app.bot.set_webhook(webhook_full_url)
         logging.info(f"🌐 Webhook configurado em: {webhook_full_url}")
 
-        # Inicia o servidor Uvicorn sem novo loop
         config = uvicorn.Config(webapp, host="0.0.0.0", port=PORT, log_level="info")
         server = uvicorn.Server(config)
         await server.serve()

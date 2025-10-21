@@ -1,4 +1,4 @@
-python-telegram-bot==21.6
+python-telegram-bot==21.4
 fastapi==0.115.0
 uvicorn==0.30.3
 beautifulsoup4==4.12.3
@@ -6,3 +6,5 @@ requests==2.32.3
 APScheduler==3.10.4
 python-dotenv==1.0.1
 colorama==0.4.6
+aiohttp==3.9.5
+beautifulsoup4==4.12.3

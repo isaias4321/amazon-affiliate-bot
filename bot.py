@@ -87,23 +87,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
-    if chat_id in posting_jobs:
-        await update.message.reply_text("✅ As postagens já estão ativas!")
-        return
+    job_id = f"posting-{chat_id}"
 
-    job = scheduler.add_job(postar_ofertas, "interval", minutes=3, args=[context], id=f"posting-{chat_id}")
+    # Remove o job antigo se já existir
+    existing_job = scheduler.get_job(job_id)
+    if existing_job:
+        scheduler.remove_job(job_id)
+        logging.info(f"🧹 Job antigo removido ({job_id})")
+
+    job = scheduler.add_job(postar_ofertas, "interval", minutes=3, args=[context], id=job_id)
     job.chat_id = chat_id
     posting_jobs[chat_id] = job
+
     await update.message.reply_text("🚀 Postagens automáticas iniciadas!")
+    logging.info(f"✅ Novo job de postagem criado para o chat {chat_id}")
 
 async def stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
-    job = posting_jobs.pop(chat_id, None)
-    if job:
-        job.remove()
+    job_id = f"posting-{chat_id}"
+
+    existing_job = scheduler.get_job(job_id)
+    if existing_job:
+        scheduler.remove_job(job_id)
+        posting_jobs.pop(chat_id, None)
         await update.message.reply_text("🛑 Postagens automáticas pausadas.")
+        logging.info(f"🧩 Job removido ({job_id})")
     else:
-        await update.message.reply_text("ℹ️ Nenhuma postagem ativa.")
+        await update.message.reply_text("ℹ️ Nenhuma postagem ativa no momento.")
 
 # ===== WEBHOOK FASTAPI =====
 @webapp.post("/webhook/{token}")
@@ -132,7 +142,7 @@ async def main():
 
     scheduler.start()
 
-    # 🟢 Inicializa a aplicação antes de processar webhooks
+    # Inicializa o bot antes do webhook
     await app.initialize()
     await app.start()
 
@@ -148,7 +158,6 @@ async def main():
         server = uvicorn.Server(config)
         await server.serve()
 
-        # 🔴 Finaliza corretamente após o servidor parar
         await app.stop()
         await app.shutdown()
     else:

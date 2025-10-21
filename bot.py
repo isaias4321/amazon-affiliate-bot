@@ -54,26 +54,30 @@ def buscar_ofertas_amazon(limit=5):
                       "Chrome/118.0.0.0 Safari/537.36"
     }
 
-    response = requests.get(url, headers=headers, timeout=20)
-    soup = BeautifulSoup(response.text, "html.parser")
+    try:
+        response = requests.get(url, headers=headers, timeout=20)
+        soup = BeautifulSoup(response.text, "html.parser")
 
-    produtos = []
-    for item in soup.select("div.s-main-slot div[data-asin]")[:limit]:
-        asin = item.get("data-asin")
-        titulo_tag = item.select_one("h2 a span")
-        preco_tag = item.select_one("span.a-price-whole")
+        produtos = []
+        for item in soup.select("div.s-main-slot div[data-asin]")[:limit]:
+            asin = item.get("data-asin")
+            titulo_tag = item.select_one("h2 a span")
+            preco_tag = item.select_one("span.a-price-whole")
 
-        if asin and titulo_tag and preco_tag:
-            produtos.append({
-                "titulo": titulo_tag.text.strip(),
-                "preco": f"R$ {preco_tag.text.strip()}",
-                "url": f"https://www.amazon.com.br/dp/{asin}?tag={AFILIADO_TAG}"
-            })
-    return produtos
+            if asin and titulo_tag and preco_tag:
+                produtos.append({
+                    "titulo": titulo_tag.text.strip(),
+                    "preco": f"R$ {preco_tag.text.strip()}",
+                    "url": f"https://www.amazon.com.br/dp/{asin}?tag={AFILIADO_TAG}"
+                })
+        return produtos
+    except Exception as e:
+        logger.error(f"Erro ao buscar ofertas: {e}")
+        return []
 
 
 # ==============================
-# FUNÇÕES DO BOT
+# FUNÇÕES DO BOT (corrigidas)
 # ==============================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -83,10 +87,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = context.job.chat_id
+    """Envia ofertas automaticamente para o grupo."""
+    chat_id = context.job.id.replace("posting-", "")
     logger.info(f"🛍️ Buscando novas ofertas para {chat_id}...")
-    ofertas = buscar_ofertas_amazon(limit=4)
 
+    ofertas = buscar_ofertas_amazon(limit=4)
     if not ofertas:
         await context.bot.send_message(chat_id, "⚠️ Nenhuma oferta encontrada no momento.")
         return
@@ -96,19 +101,29 @@ async def postar_ofertas(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id, msg, parse_mode="Markdown")
 
 async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
+    """Inicia postagens automáticas."""
+    chat_id = str(update.effective_chat.id)
 
     existing_job = scheduler.get_job(f"posting-{chat_id}")
     if existing_job:
         await update.message.reply_text("⚠️ Já estou postando ofertas aqui!")
         return
 
-    scheduler.add_job(postar_ofertas, "interval", minutes=3, id=f"posting-{chat_id}", args=[context])
+    scheduler.add_job(
+        postar_ofertas,
+        trigger="interval",
+        minutes=3,
+        id=f"posting-{chat_id}",
+        args=[context],
+        replace_existing=True,
+    )
+
     await update.message.reply_text("✅ Postagens automáticas iniciadas! 🔥")
     logger.info(f"✅ Novo job de postagem criado para o chat {chat_id}")
 
 async def stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
+    """Para as postagens automáticas."""
+    chat_id = str(update.effective_chat.id)
     job = scheduler.get_job(f"posting-{chat_id}")
     if job:
         scheduler.remove_job(job.id)
@@ -151,7 +166,6 @@ async def main():
     await app.bot.set_webhook(webhook_url)
     logger.info(f"🌐 Webhook configurado em: {webhook_url}")
 
-    # Executa FastAPI sem bloquear asyncio
     config = uvicorn.Config(webapp, host="0.0.0.0", port=PORT, log_level="info")
     server = uvicorn.Server(config)
     await server.serve()

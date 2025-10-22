@@ -153,10 +153,14 @@ async def start_posting(update, context):
     logger.info("🕒 Postagens automáticas iniciadas via comando /start_posting.")
 
 # ===============================
-# INÍCIO DO BOT
+# INÍCIO DO BOT (COM FIX DE CONFLITO)
 # ===============================
 async def main():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # ✅ Força o encerramento de qualquer sessão antiga (corrige o 409 Conflict)
+    await application.bot.delete_webhook(drop_pending_updates=True)
+    logger.info("🧹 Webhook antigo removido — garantindo apenas uma instância ativa.")
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("start_posting", start_posting))

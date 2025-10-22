@@ -1,8 +1,15 @@
-python-telegram-bot[rate-limiter]==20.6
-apscheduler==3.10.4
+# Telegram Bot e dependências assíncronas
+python-telegram-bot[ext,rate-limiter]==20.7
 aiohttp==3.9.5
-feedparser==6.0.11
+
+# Agendador de tarefas assíncrono
+APScheduler==3.10.4
+
+# Utilitários do sistema
+asyncio==3.4.3
+
+# Logs coloridos (opcional, mas útil)
+colorlog==6.8.2
+
+# Dependências auxiliares
 requests==2.32.3
-beautifulsoup4==4.12.3
-pytz==2024.1
-lxml==5.2.2

@@ -1,162 +1,128 @@
 import os
-import logging
+import random
 import asyncio
+import logging
 import aiohttp
-import feedparser
-from random import choice
-from telegram.ext import ApplicationBuilder, CommandHandler
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-import nest_asyncio
+from telegram import Bot
+from telegram.ext import Application, CommandHandler
 
-# -------------------------------
-# CONFIGURAÇÕES
-# -------------------------------
-TOKEN = os.getenv("BOT_TOKEN")
-PORT = int(os.getenv("PORT", 8080))
-BASE_URL = os.getenv("BASE_URL", "https://amazon-ofertas-api.up.railway.app")
+# 🔧 Configurações
+TOKEN = os.getenv("BOT_TOKEN", "SEU_TOKEN_AQUI")
+VALUE_SERP_API = os.getenv("VALUE_SERP_API", "0646FC6961A84884A0657B9DF6D85C89")
 
-# Feeds RSS de categorias da Amazon (BR)
-AMAZON_FEEDS = {
-    "smartphones": "https://www.amazon.com.br/gp/rss/bestsellers/electronics/16243842011",
-    "notebooks": "https://www.amazon.com.br/gp/rss/bestsellers/computers/16364755011",
-    "perifericos_gamer": "https://www.amazon.com.br/gp/rss/bestsellers/games/7842738011",
-    "eletrodomesticos": "https://www.amazon.com.br/gp/rss/bestsellers/kitchen/17861999011",
-    "ferramentas": "https://www.amazon.com.br/gp/rss/bestsellers/hi/17859841011",
-}
+CATEGORIAS = [
+    "smartphone site:amazon.com.br",
+    "notebook site:amazon.com.br",
+    "periféricos gamer site:amazon.com.br",
+    "eletrodoméstico site:amazon.com.br",
+    "ferramentas site:amazon.com.br"
+]
 
-# -------------------------------
-# LOGS
-# -------------------------------
+INTERVALO_MINUTOS = 2  # intervalo de 2 minutos
+scheduler = AsyncIOScheduler()
+
+# 🎯 Configura logging
 logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-# -------------------------------
-# FUNÇÃO: BUSCAR OFERTA ALEATÓRIA
-# -------------------------------
+# 🔍 Buscar ofertas reais da Amazon
 async def buscar_oferta():
-    categoria, url = choice(list(AMAZON_FEEDS.items()))
-    logger.info(f"🔍 Buscando ofertas RSS da categoria: {categoria}")
+    categoria = random.choice(CATEGORIAS)
+    url = f"https://api.valueserp.com/search?api_key={VALUE_SERP_API}&q={categoria}&gl=br&hl=pt-br&output=json"
 
-    try:
-        feed = feedparser.parse(url)
-        if not feed.entries:
-            logger.warning(f"⚠️ Nenhuma oferta encontrada no feed {categoria}")
-            return None
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            if response.status != 200:
+                logger.error(f"❌ Erro {response.status} ao consultar ValueSERP.")
+                return None
+            data = await response.json()
 
-        oferta = choice(feed.entries)
-        titulo = oferta.get("title", "Produto sem nome")
-        link = oferta.get("link", "")
-        descricao = oferta.get("summary", "Sem descrição")
-        imagem = ""
-        if "img" in descricao:
-            # Tenta extrair a URL da imagem do HTML do RSS
-            start = descricao.find("src=")
-            if start != -1:
-                imagem = descricao[start+5:descricao.find('"', start+5)]
-
-        mensagem = (
-            f"💥 *{titulo}*\n"
-            f"🏷️ Categoria: {categoria.capitalize()}\n"
-            f"💰 [Ver na Amazon]({link})"
-        )
-
-        logger.info(f"✅ Oferta obtida: {titulo}")
-        return {"texto": mensagem, "imagem": imagem}
-
-    except Exception as e:
-        logger.error(f"❌ Erro ao buscar RSS: {e}")
+    resultados = data.get("organic_results", [])
+    if not resultados:
+        logger.warning(f"⚠️ Nenhuma oferta encontrada para {categoria}")
         return None
 
-# -------------------------------
-# FUNÇÃO: POSTAR OFERTA
-# -------------------------------
+    oferta = random.choice(resultados[:5])  # escolhe uma das 5 primeiras
+    titulo = oferta.get("title", "Oferta sem título")
+    link = oferta.get("link", "")
+    imagem = oferta.get("thumbnail", None)
+
+    preco = None
+    snippet = oferta.get("snippet", "")
+    if "R$" in snippet:
+        preco = snippet.split("R$")[-1].split()[0]
+
+    return {
+        "titulo": titulo,
+        "link": link,
+        "preco": f"💸 R$ {preco}" if preco else "💸 Preço não disponível",
+        "imagem": imagem
+    }
+
+# 🤖 Enviar oferta ao grupo
 async def postar_oferta(context):
-    chat_id = context.job.data
-    logger.info(f"📦 Executando ciclo de postagem para chat_id={chat_id}")
+    chat_id = context.job.chat_id
     oferta = await buscar_oferta()
 
     if not oferta:
-        await context.bot.send_message(chat_id, "⚠️ Nenhuma oferta disponível agora. Tentando novamente mais tarde.")
+        await context.bot.send_message(chat_id, "⚠️ Nenhuma oferta encontrada no momento.")
         return
 
-    try:
-        if oferta["imagem"]:
-            await context.bot.send_photo(
-                chat_id=chat_id,
-                photo=oferta["imagem"],
-                caption=oferta["texto"],
-                parse_mode="Markdown"
-            )
-        else:
-            await context.bot.send_message(chat_id, oferta["texto"], parse_mode="Markdown")
-        logger.info(f"📤 Oferta enviada para {chat_id}")
-    except Exception as e:
-        logger.error(f"❌ Erro ao enviar oferta: {e}")
+    mensagem = f"🔥 *{oferta['titulo']}*\n{oferta['preco']}\n🛒 [Ver na Amazon]({oferta['link']})"
+    if oferta["imagem"]:
+        await context.bot.send_photo(chat_id, photo=oferta["imagem"], caption=mensagem, parse_mode="Markdown")
+    else:
+        await context.bot.send_message(chat_id, mensagem, parse_mode="Markdown")
 
-# -------------------------------
-# COMANDOS DO BOT
-# -------------------------------
-async def start(update, context):
-    await update.message.reply_text("🤖 Olá! Eu envio automaticamente as melhores ofertas da Amazon Brasil.\nUse /iniciar para começar!")
+    logger.info(f"✅ Oferta postada no chat {chat_id}: {oferta['titulo']}")
 
+# 🟢 Iniciar postagens automáticas
 async def start_posting(update, context):
     chat_id = update.effective_chat.id
-    job_id = f"posting-{chat_id}"
-    logger.info(f"🚀 Iniciando ciclo de postagens automáticas no chat {chat_id}")
 
-    old_job = context.job_queue.get_jobs_by_name(job_id)
-    if old_job:
-        for job in old_job:
-            job.schedule_removal()
-            logger.info(f"🧹 Job antigo removido: {job_id}")
+    # Remove job anterior, se existir
+    existing_job = scheduler.get_job(f"posting-{chat_id}")
+    if existing_job:
+        existing_job.remove()
 
-    job = context.job_queue.run_repeating(postar_oferta, interval=180, first=5, data=chat_id, name=job_id)
-    await update.message.reply_text("✅ Envio automático de ofertas iniciado! 🛍️")
+    scheduler.add_job(postar_oferta, "interval", minutes=INTERVALO_MINUTOS, args=[context], id=f"posting-{chat_id}")
+    scheduler.get_job(f"posting-{chat_id}").chat_id = chat_id
 
+    await update.message.reply_text("✅ Postagens automáticas iniciadas! O bot enviará 1 oferta a cada 2 minutos.")
+    logger.info(f"🚀 Ciclo iniciado para chat_id={chat_id}")
+
+# 🔴 Parar postagens
 async def stop_posting(update, context):
     chat_id = update.effective_chat.id
-    job_id = f"posting-{chat_id}"
-    jobs = context.job_queue.get_jobs_by_name(job_id)
-    if not jobs:
-        await update.message.reply_text("⚠️ Nenhuma postagem ativa para parar.")
-        return
-    for job in jobs:
-        job.schedule_removal()
-    logger.info(f"🛑 Postagens paradas no chat {chat_id}")
-    await update.message.reply_text("🛑 Envio automático de ofertas interrompido.")
+    job = scheduler.get_job(f"posting-{chat_id}")
 
-# -------------------------------
-# EXECUÇÃO PRINCIPAL
-# -------------------------------
+    if job:
+        job.remove()
+        await update.message.reply_text("🛑 Postagens automáticas paradas.")
+        logger.info(f"⛔ Postagens paradas para {chat_id}")
+    else:
+        await update.message.reply_text("⚠️ Nenhuma postagem automática ativa neste chat.")
+
+# 🚀 Função principal
 async def main():
-    logger.info("🚀 Iniciando bot (modo webhook)...")
+    application = Application.builder().token(TOKEN).build()
 
-    application = ApplicationBuilder().token(TOKEN).build()
+    application.add_handler(CommandHandler("startposting", start_posting))
+    application.add_handler(CommandHandler("stopposting", stop_posting))
 
-    scheduler = AsyncIOScheduler()
     scheduler.start()
-    logger.info("✅ Scheduler iniciado")
-
-    # Handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("iniciar", start_posting))
-    application.add_handler(CommandHandler("parar", stop_posting))
-
-    # Configuração do webhook
-    await application.bot.delete_webhook()
-    await application.bot.set_webhook(url=f"{BASE_URL}/webhook/{TOKEN}")
-    logger.info(f"🌐 Webhook configurado em: {BASE_URL}/webhook/{TOKEN}")
+    logger.info("🚀 Bot iniciado com sucesso! (Webhook nativo PTB)")
 
     await application.run_webhook(
         listen="0.0.0.0",
-        port=PORT,
-        url_path=f"webhook/{TOKEN}",
-        webhook_url=f"{BASE_URL}/webhook/{TOKEN}",
+        port=int(os.getenv("PORT", "8080")),
+        url_path=TOKEN,
+        webhook_url=f"https://amazon-ofertas-api.up.railway.app/webhook/{TOKEN}"
     )
 
 if __name__ == "__main__":
-    nest_asyncio.apply()
-    asyncio.get_event_loop().run_until_complete(main())
+    asyncio.run(main())

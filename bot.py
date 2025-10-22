@@ -2,22 +2,21 @@ import os
 import logging
 import asyncio
 import aiohttp
-from telegram import Bot, InputMediaPhoto
+from telegram import Bot
 from telegram.ext import ApplicationBuilder, CommandHandler
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from random import choice
 import nest_asyncio
 
 # -------------------------------
-# CONFIGURAÇÕES GERAIS
+# CONFIGURAÇÕES
 # -------------------------------
 TOKEN = os.getenv("BOT_TOKEN")
 VALUE_SERP_API_KEY = os.getenv("VALUE_SERP_API_KEY")
 AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "seu-tag-afiliado")
 PORT = int(os.getenv("PORT", 8080))
-BASE_URL = os.getenv("BASE_URL", f"https://amazon-ofertas-api.up.railway.app")
+BASE_URL = os.getenv("BASE_URL", "https://amazon-ofertas-api.up.railway.app")
 
-# Tópicos de busca
 SEARCH_TERMS = [
     "smartphone Amazon",
     "notebook Amazon",
@@ -36,7 +35,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # -------------------------------
-# FUNÇÃO PARA BUSCAR OFERTAS
+# BUSCAR OFERTA
 # -------------------------------
 async def buscar_oferta():
     termo = choice(SEARCH_TERMS)
@@ -67,7 +66,7 @@ async def buscar_oferta():
     return {"texto": mensagem, "imagem": imagem}
 
 # -------------------------------
-# FUNÇÃO DE POSTAGEM
+# POSTAR OFERTA
 # -------------------------------
 async def postar_oferta(context):
     chat_id = context.job.data
@@ -90,9 +89,10 @@ async def postar_oferta(context):
         logger.error(f"Erro ao enviar oferta: {e}")
 
 # -------------------------------
-# COMANDOS DO BOT
+# COMANDOS
 # -------------------------------
 async def start(update, context):
+    logger.info(f"Mensagem recebida de {update.effective_chat.id}: {update.message.text}")
     await update.message.reply_text("🤖 Olá! Eu irei enviar ofertas automaticamente aqui a cada ciclo.")
 
 async def start_posting(update, context):
@@ -121,14 +121,13 @@ async def stop_posting(update, context):
     await update.message.reply_text("🛑 Envio automático de ofertas parado.")
 
 # -------------------------------
-# FUNÇÃO PRINCIPAL
+# PRINCIPAL
 # -------------------------------
 async def main():
     logger.info("🚀 Iniciando bot (webhook nativo PTB) ...")
 
     application = ApplicationBuilder().token(TOKEN).build()
 
-    # Scheduler
     scheduler = AsyncIOScheduler()
     scheduler.start()
     logger.info("Scheduler started")
@@ -138,21 +137,21 @@ async def main():
     application.add_handler(CommandHandler("iniciar", start_posting))
     application.add_handler(CommandHandler("parar", stop_posting))
 
-    # Configurar webhook no Railway
+    # Configurar webhook corretamente
     await application.bot.delete_webhook()
     await application.bot.set_webhook(url=f"{BASE_URL}/webhook/{TOKEN}")
     logger.info(f"🌐 Webhook configurado em: {BASE_URL}/webhook/{TOKEN}")
 
-    # Iniciar o webhook
+    # Rodar o webhook (corrigido)
     await application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        url_path=TOKEN,
+        url_path=f"webhook/{TOKEN}",
         webhook_url=f"{BASE_URL}/webhook/{TOKEN}",
     )
 
 # -------------------------------
-# EXECUÇÃO SEGURA DO LOOP
+# EXECUÇÃO SEGURA
 # -------------------------------
 if __name__ == "__main__":
     import nest_asyncio
@@ -160,7 +159,10 @@ if __name__ == "__main__":
 
     try:
         loop = asyncio.get_event_loop()
-        loop.create_task(main())
-        loop.run_forever()
+        if not loop.is_running():
+            loop.create_task(main())
+            loop.run_forever()
+        else:
+            logger.warning("⚠️ Event loop já estava em execução.")
     except (KeyboardInterrupt, SystemExit):
         pass

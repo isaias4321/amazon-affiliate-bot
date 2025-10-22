@@ -5,6 +5,7 @@ import logging
 import aiohttp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram.ext import Application, CommandHandler
+from telegram.error import Conflict
 
 # 🔧 Configurações
 TOKEN = os.getenv("BOT_TOKEN", "SEU_TOKEN_AQUI")
@@ -99,15 +100,35 @@ async def stop_posting(update, context):
     else:
         await update.message.reply_text("⚠️ Nenhum ciclo de postagem ativo neste chat.")
 
+# 🧠 Status do bot
+async def status(update, context):
+    jobs = scheduler.get_jobs()
+    ativos = [job.id for job in jobs if job.id.startswith("posting-")]
+    if ativos:
+        resposta = "📊 *Status do Bot:*\n"
+        for job_id in ativos:
+            chat = job_id.replace("posting-", "")
+            resposta += f"• Chat ativo: `{chat}` (2min)\n"
+    else:
+        resposta = "🟡 Nenhuma postagem ativa no momento."
+    await update.message.reply_text(resposta, parse_mode="Markdown")
+
 # 🚀 Função principal
 async def main():
     application = Application.builder().token(TOKEN).build()
+
     application.add_handler(CommandHandler("startposting", start_posting))
     application.add_handler(CommandHandler("stopposting", stop_posting))
+    application.add_handler(CommandHandler("status", status))
 
     scheduler.start()
-    logger.info("🤖 Bot iniciado em modo polling!")
-    await application.run_polling()
+    logger.info("🤖 Bot iniciado em modo polling seguro!")
+
+    try:
+        await application.run_polling()
+    except Conflict:
+        logger.warning("⚠️ Outra instância do bot já está rodando. Encerrando esta instância...")
+        os._exit(0)
 
 # 🔄 Correção do loop do Railway
 if __name__ == "__main__":

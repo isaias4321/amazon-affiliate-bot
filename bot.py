@@ -9,25 +9,25 @@ from telegram.ext import ApplicationBuilder, CommandHandler
 # ===============================
 # 🔧 CONFIGURAÇÕES
 # ===============================
-BOT_TOKEN = "SEU_TOKEN_DO_BOT"
+BOT_TOKEN = "8463817884:AAE23cMr1605qbMV4c79cMcr8F5dn0ETqRo"
 CHAT_ID = -1003140787649
-INTERVALO = 120  # 2 minutos
+INTERVALO = 120  # tempo entre ofertas (2 minutos)
 
-# Shopee links afiliados
+# Shopee afiliado
 SHOPEE_AFF_LINKS = [
     "https://s.shopee.com.br/1gACNJP1z9",
     "https://s.shopee.com.br/8pdMudgZun",
     "https://s.shopee.com.br/20n2m66Bj1"
 ]
 
-# ID afiliado Mercado Livre
+# Mercado Livre afiliado
 ML_AFF_ID = "im20250701092308"
 
-# Categorias
+# Categorias aleatórias
 CATEGORIAS = ["smartphone", "notebook", "ferramentas", "periféricos gamer"]
 
 # ===============================
-# LOGS
+# LOGS FORMATADOS
 # ===============================
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -36,7 +36,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ===============================
-# BUSCA SHOPEE
+# FUNÇÕES DE BUSCA
 # ===============================
 async def buscar_shopee():
     categoria = random.choice(CATEGORIAS)
@@ -53,16 +53,15 @@ async def buscar_shopee():
             imagem = f"https://down-br.img.susercontent.com/file/{produto['item_basic']['image']}_tn"
             link_afiliado = random.choice(SHOPEE_AFF_LINKS)
 
+            logger.info(f"🟠 [SHOPEE] Produto capturado: {nome[:60]}...")
             return {
+                "loja": "Shopee",
                 "titulo": nome,
                 "preco": f"R$ {preco:.2f}",
                 "imagem": imagem,
                 "link": link_afiliado
             }
 
-# ===============================
-# BUSCA MERCADO LIVRE
-# ===============================
 async def buscar_mercadolivre():
     categoria = random.choice(CATEGORIAS)
     async with aiohttp.ClientSession() as session:
@@ -78,7 +77,9 @@ async def buscar_mercadolivre():
             imagem = produto.get("thumbnail", "")
             link_afiliado = f"{produto['permalink']}?utm_source={ML_AFF_ID}"
 
+            logger.info(f"🟡 [MERCADO LIVRE] Produto capturado: {nome[:60]}...")
             return {
+                "loja": "Mercado Livre",
                 "titulo": nome,
                 "preco": f"R$ {preco:.2f}",
                 "imagem": imagem,
@@ -107,11 +108,12 @@ async def postar_oferta(bot: Bot):
     texto = (
         f"🔥 <b>{oferta['titulo']}</b>\n"
         f"💰 <b>Preço:</b> {oferta['preco']}\n\n"
+        f"🏬 <b>Loja:</b> {oferta['loja']}\n"
         f"🛒 <b>Compre agora:</b>"
     )
 
     botao = InlineKeyboardMarkup([
-        [InlineKeyboardButton("👉 Ver Oferta", url=oferta["link"])]
+        [InlineKeyboardButton("🛍️ Ver oferta", url=oferta["link"])]
     ])
 
     try:
@@ -122,7 +124,7 @@ async def postar_oferta(bot: Bot):
             parse_mode="HTML",
             reply_markup=botao
         )
-        logger.info(f"✅ Oferta enviada: {oferta['titulo']}")
+        logger.info(f"✅ Oferta enviada ({oferta['loja']}): {oferta['titulo'][:70]}")
     except Exception as e:
         logger.error(f"❌ Erro ao enviar oferta: {e}")
 
@@ -130,10 +132,10 @@ async def postar_oferta(bot: Bot):
 # COMANDO /start
 # ===============================
 async def start(update, context):
-    await update.message.reply_text("🤖 Bot de ofertas iniciado!")
+    await update.message.reply_text("🤖 Bot de ofertas iniciado com sucesso!")
 
 # ===============================
-# MAIN
+# INÍCIO DO BOT
 # ===============================
 async def main():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -145,11 +147,11 @@ async def main():
 
     application.add_handler(CommandHandler("start", start))
 
-    logger.info("🚀 Bot iniciado com alternância Shopee ↔ Mercado Livre!")
+    logger.info("🚀 Bot iniciado — alternando Shopee ↔ Mercado Livre automaticamente!")
     await application.initialize()
     await application.start()
     await application.updater.start_polling()
-    await asyncio.Event().wait()  # mantém rodando
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()

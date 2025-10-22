@@ -22,14 +22,14 @@ CATEGORIAS = [
 INTERVALO_MINUTOS = 2  # intervalo de 2 minutos
 scheduler = AsyncIOScheduler()
 
-# 🎯 Configura logging
+# 🎯 Logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-# 🔍 Buscar ofertas reais da Amazon
+# 🔍 Busca real de ofertas
 async def buscar_oferta():
     categoria = random.choice(CATEGORIAS)
     url = f"https://api.valueserp.com/search?api_key={VALUE_SERP_API}&q={categoria}&gl=br&hl=pt-br&output=json"
@@ -37,7 +37,7 @@ async def buscar_oferta():
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as response:
             if response.status != 200:
-                logger.error(f"❌ Erro {response.status} ao consultar ValueSERP.")
+                logger.error(f"❌ Erro {response.status} na API ValueSERP.")
                 return None
             data = await response.json()
 
@@ -46,7 +46,7 @@ async def buscar_oferta():
         logger.warning(f"⚠️ Nenhuma oferta encontrada para {categoria}")
         return None
 
-    oferta = random.choice(resultados[:5])  # escolhe uma das 5 primeiras
+    oferta = random.choice(resultados[:5])
     titulo = oferta.get("title", "Oferta sem título")
     link = oferta.get("link", "")
     imagem = oferta.get("thumbnail", None)
@@ -63,7 +63,7 @@ async def buscar_oferta():
         "imagem": imagem
     }
 
-# 🤖 Enviar oferta ao grupo
+# 📢 Postar oferta
 async def postar_oferta(context):
     chat_id = context.job.chat_id
     oferta = await buscar_oferta()
@@ -80,11 +80,9 @@ async def postar_oferta(context):
 
     logger.info(f"✅ Oferta postada no chat {chat_id}: {oferta['titulo']}")
 
-# 🟢 Iniciar postagens automáticas
+# ▶️ Iniciar postagens
 async def start_posting(update, context):
     chat_id = update.effective_chat.id
-
-    # Remove job anterior, se existir
     existing_job = scheduler.get_job(f"posting-{chat_id}")
     if existing_job:
         existing_job.remove()
@@ -92,20 +90,19 @@ async def start_posting(update, context):
     scheduler.add_job(postar_oferta, "interval", minutes=INTERVALO_MINUTOS, args=[context], id=f"posting-{chat_id}")
     scheduler.get_job(f"posting-{chat_id}").chat_id = chat_id
 
-    await update.message.reply_text("✅ Postagens automáticas iniciadas! O bot enviará 1 oferta a cada 2 minutos.")
-    logger.info(f"🚀 Ciclo iniciado para chat_id={chat_id}")
+    await update.message.reply_text("✅ Postagens automáticas iniciadas! 1 oferta a cada 2 minutos.")
+    logger.info(f"🚀 Ciclo de postagens iniciado para chat {chat_id}")
 
-# 🔴 Parar postagens
+# ⏹ Parar postagens
 async def stop_posting(update, context):
     chat_id = update.effective_chat.id
     job = scheduler.get_job(f"posting-{chat_id}")
-
     if job:
         job.remove()
         await update.message.reply_text("🛑 Postagens automáticas paradas.")
-        logger.info(f"⛔ Postagens paradas para {chat_id}")
+        logger.info(f"⛔ Postagens paradas para chat {chat_id}")
     else:
-        await update.message.reply_text("⚠️ Nenhuma postagem automática ativa neste chat.")
+        await update.message.reply_text("⚠️ Nenhum ciclo de postagem ativo neste chat.")
 
 # 🚀 Função principal
 async def main():
@@ -115,16 +112,21 @@ async def main():
     application.add_handler(CommandHandler("stopposting", stop_posting))
 
     scheduler.start()
-    logger.info("🚀 Bot iniciado com sucesso! (Webhook nativo PTB)")
+    logger.info("🤖 Bot iniciado!")
 
-    await application.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.getenv("PORT", "8080")),
-        url_path=TOKEN,
-        webhook_url=f"https://amazon-ofertas-api.up.railway.app/webhook/{TOKEN}"
-    )
+    # 🧠 Tenta webhook, se falhar usa polling automaticamente
+    try:
+        await application.run_webhook(
+            listen="0.0.0.0",
+            port=int(os.getenv("PORT", "8080")),
+            url_path=TOKEN,
+            webhook_url=f"https://amazon-ofertas-api.up.railway.app/webhook/{TOKEN}"
+        )
+    except Exception as e:
+        logger.warning(f"⚠️ Webhook falhou ({e}), mudando para polling...")
+        await application.run_polling()
 
-# 🔄 Corrige o loop do Railway
+# 🔄 Evita erro de loop no Railway
 if __name__ == "__main__":
     import nest_asyncio
     nest_asyncio.apply()

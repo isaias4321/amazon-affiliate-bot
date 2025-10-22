@@ -4,7 +4,6 @@ import asyncio
 import logging
 import aiohttp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from telegram import Bot
 from telegram.ext import Application, CommandHandler
 
 # 🔧 Configurações
@@ -19,17 +18,14 @@ CATEGORIAS = [
     "ferramentas site:amazon.com.br"
 ]
 
-INTERVALO_MINUTOS = 2  # intervalo de 2 minutos
+INTERVALO_MINUTOS = 2
 scheduler = AsyncIOScheduler()
 
 # 🎯 Logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# 🔍 Busca real de ofertas
+# 🔍 Buscar oferta real
 async def buscar_oferta():
     categoria = random.choice(CATEGORIAS)
     url = f"https://api.valueserp.com/search?api_key={VALUE_SERP_API}&q={categoria}&gl=br&hl=pt-br&output=json"
@@ -50,7 +46,6 @@ async def buscar_oferta():
     titulo = oferta.get("title", "Oferta sem título")
     link = oferta.get("link", "")
     imagem = oferta.get("thumbnail", None)
-
     preco = None
     snippet = oferta.get("snippet", "")
     if "R$" in snippet:
@@ -63,7 +58,7 @@ async def buscar_oferta():
         "imagem": imagem
     }
 
-# 📢 Postar oferta
+# 📢 Enviar oferta
 async def postar_oferta(context):
     chat_id = context.job.chat_id
     oferta = await buscar_oferta()
@@ -107,28 +102,15 @@ async def stop_posting(update, context):
 # 🚀 Função principal
 async def main():
     application = Application.builder().token(TOKEN).build()
-
     application.add_handler(CommandHandler("startposting", start_posting))
     application.add_handler(CommandHandler("stopposting", stop_posting))
 
     scheduler.start()
-    logger.info("🤖 Bot iniciado!")
+    logger.info("🤖 Bot iniciado em modo polling!")
+    await application.run_polling()
 
-    # 🧠 Tenta webhook, se falhar usa polling automaticamente
-    try:
-        await application.run_webhook(
-            listen="0.0.0.0",
-            port=int(os.getenv("PORT", "8080")),
-            url_path=TOKEN,
-            webhook_url=f"https://amazon-ofertas-api.up.railway.app/webhook/{TOKEN}"
-        )
-    except Exception as e:
-        logger.warning(f"⚠️ Webhook falhou ({e}), mudando para polling...")
-        await application.run_polling()
-
-# 🔄 Evita erro de loop no Railway
+# 🔄 Correção do loop do Railway
 if __name__ == "__main__":
     import nest_asyncio
     nest_asyncio.apply()
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    asyncio.run(main())

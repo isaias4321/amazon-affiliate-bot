@@ -1,6 +1,9 @@
-python-telegram-bot[webhooks]
-aiohttp
-feedparser
-apscheduler
-nest_asyncio
-requests
+# Dependências principais do bot
+python-telegram-bot[webhooks,rate-limiter]==21.6
+aiohttp==3.9.5
+
+# Utilitários adicionais para robustez e logs (opcionais, mas recomendados)
+certifi>=2024.2.2
+charset-normalizer>=3.3.2
+idna>=3.6
+urllib3>=2.2.1

@@ -7,27 +7,27 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler
 
 # ===============================
-# 🔧 CONFIGURAÇÕES PRINCIPAIS
+# 🔧 CONFIGURAÇÕES
 # ===============================
 BOT_TOKEN = "SEU_TOKEN_DO_BOT"
-CHAT_ID = -1003140787649  # substitua pelo ID do seu grupo
+CHAT_ID = -1003140787649
 INTERVALO = 120  # 2 minutos
 
-# Links afiliados Shopee
+# Shopee links afiliados
 SHOPEE_AFF_LINKS = [
     "https://s.shopee.com.br/1gACNJP1z9",
     "https://s.shopee.com.br/8pdMudgZun",
-    "https://s.shopee.com.br/20n2m66Bj1",
+    "https://s.shopee.com.br/20n2m66Bj1"
 ]
 
-# ID de afiliado Mercado Livre
+# ID afiliado Mercado Livre
 ML_AFF_ID = "im20250701092308"
 
-# Categorias de busca
+# Categorias
 CATEGORIAS = ["smartphone", "notebook", "ferramentas", "periféricos gamer"]
 
 # ===============================
-# 🧠 CONFIGURAÇÃO DE LOGS
+# LOGS
 # ===============================
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -36,7 +36,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ===============================
-# 🔍 FUNÇÕES DE BUSCA
+# BUSCA SHOPEE
 # ===============================
 async def buscar_shopee():
     categoria = random.choice(CATEGORIAS)
@@ -60,6 +60,9 @@ async def buscar_shopee():
                 "link": link_afiliado
             }
 
+# ===============================
+# BUSCA MERCADO LIVRE
+# ===============================
 async def buscar_mercadolivre():
     categoria = random.choice(CATEGORIAS)
     async with aiohttp.ClientSession() as session:
@@ -73,8 +76,7 @@ async def buscar_mercadolivre():
             nome = produto["title"]
             preco = produto["price"]
             imagem = produto.get("thumbnail", "")
-            link_base = produto["permalink"]
-            link_afiliado = f"{link_base}?utm_source={ML_AFF_ID}"
+            link_afiliado = f"{produto['permalink']}?utm_source={ML_AFF_ID}"
 
             return {
                 "titulo": nome,
@@ -84,9 +86,9 @@ async def buscar_mercadolivre():
             }
 
 # ===============================
-# 📦 POSTAGENS AUTOMÁTICAS
+# POSTAGEM AUTOMÁTICA
 # ===============================
-ULTIMO_MARKETPLACE = "mercadolivre"  # inicia alternando
+ULTIMO_MARKETPLACE = "mercadolivre"
 
 async def postar_oferta(bot: Bot):
     global ULTIMO_MARKETPLACE
@@ -103,13 +105,13 @@ async def postar_oferta(bot: Bot):
         return
 
     texto = (
-        f"🛍️ <b>{oferta['titulo']}</b>\n"
+        f"🔥 <b>{oferta['titulo']}</b>\n"
         f"💰 <b>Preço:</b> {oferta['preco']}\n\n"
-        f"👇 <b>Compre agora com desconto:</b>"
+        f"🛒 <b>Compre agora:</b>"
     )
 
     botao = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🛒 Compre agora", url=oferta["link"])]
+        [InlineKeyboardButton("👉 Ver Oferta", url=oferta["link"])]
     ])
 
     try:
@@ -125,27 +127,30 @@ async def postar_oferta(bot: Bot):
         logger.error(f"❌ Erro ao enviar oferta: {e}")
 
 # ===============================
-# 🚀 INÍCIO DO BOT
+# COMANDO /start
 # ===============================
 async def start(update, context):
-    await update.message.reply_text("🤖 Bot de ofertas iniciado com sucesso!")
+    await update.message.reply_text("🤖 Bot de ofertas iniciado!")
 
+# ===============================
+# MAIN
+# ===============================
 async def main():
-    application = (
-        ApplicationBuilder()
-        .token(BOT_TOKEN)
-        .build()
-    )
-
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
     bot = application.bot
+
     scheduler = AsyncIOScheduler(timezone="UTC")
     scheduler.add_job(postar_oferta, "interval", seconds=INTERVALO, args=[bot])
     scheduler.start()
 
     application.add_handler(CommandHandler("start", start))
 
-    logger.info("🚀 Bot iniciado com alternância automática Shopee ↔ Mercado Livre!")
-    await application.run_polling()
+    logger.info("🚀 Bot iniciado com alternância Shopee ↔ Mercado Livre!")
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+    await asyncio.Event().wait()  # mantém rodando
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())

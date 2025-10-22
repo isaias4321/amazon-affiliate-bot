@@ -13,7 +13,6 @@ import nest_asyncio
 # -------------------------------
 TOKEN = os.getenv("BOT_TOKEN")
 VALUE_SERP_API_KEY = os.getenv("VALUE_SERP_API_KEY")
-AFFILIATE_TAG = os.getenv("AFFILIATE_TAG", "seu-tag-afiliado")
 PORT = int(os.getenv("PORT", 8080))
 BASE_URL = os.getenv("BASE_URL", "https://amazon-ofertas-api.up.railway.app")
 
@@ -35,6 +34,38 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # -------------------------------
+# TESTE AUTOMÁTICO DA API VALUE SERP
+# -------------------------------
+async def testar_valueserp():
+    termo = "notebook Amazon"
+    url = (
+        f"https://api.valueserp.com/search"
+        f"?api_key={VALUE_SERP_API_KEY}"
+        f"&q={termo}"
+        f"&location=Brazil"
+        f"&gl=br&hl=pt-br&engine=google_shopping"
+    )
+
+    logger.info("🧪 Testando API ValueSERP...")
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                logger.error(f"❌ Erro HTTP {resp.status} na ValueSERP. Verifique a chave API.")
+                return False
+            data = await resp.json()
+
+    results = data.get("shopping_results", [])
+    if not results:
+        logger.error("⚠️ Nenhum resultado retornado pela ValueSERP. Pode ser limite de créditos ou APIKey inválida.")
+        return False
+
+    sample = results[0]
+    titulo = sample.get("title", "Sem título")
+    preco = sample.get("price", {}).get("raw", "Sem preço")
+    logger.info(f"✅ Teste ValueSERP OK → Exemplo: {titulo} | {preco}")
+    return True
+
+# -------------------------------
 # BUSCAR OFERTA
 # -------------------------------
 async def buscar_oferta():
@@ -47,12 +78,17 @@ async def buscar_oferta():
         f"&gl=br&hl=pt-br&engine=google_shopping"
     )
 
+    logger.info(f"🔍 Buscando ofertas: {termo}")
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
+            if resp.status != 200:
+                logger.error(f"❌ Erro na API ValueSERP: {resp.status}")
+                return None
             data = await resp.json()
 
     results = data.get("shopping_results", [])
     if not results:
+        logger.warning("⚠️ Nenhuma oferta encontrada.")
         return None
 
     oferta = choice(results)
@@ -62,6 +98,7 @@ async def buscar_oferta():
     loja = oferta.get("source", "Amazon")
     imagem = oferta.get("thumbnail", "")
 
+    logger.info(f"✅ Oferta encontrada: {titulo} | {preco}")
     mensagem = f"💥 *{titulo}*\n🏪 Loja: {loja}\n💰 Preço: {preco}\n🔗 [Ver na Amazon]({link})"
     return {"texto": mensagem, "imagem": imagem}
 
@@ -70,7 +107,9 @@ async def buscar_oferta():
 # -------------------------------
 async def postar_oferta(context):
     chat_id = context.job.data
+    logger.info(f"📦 Executando ciclo de postagem para chat_id={chat_id}")
     oferta = await buscar_oferta()
+
     if not oferta:
         await context.bot.send_message(chat_id, "Nenhuma oferta encontrada no momento. 🔄")
         return
@@ -85,8 +124,9 @@ async def postar_oferta(context):
             )
         else:
             await context.bot.send_message(chat_id, oferta["texto"], parse_mode="Markdown")
+        logger.info(f"📤 Oferta enviada para {chat_id}")
     except Exception as e:
-        logger.error(f"Erro ao enviar oferta: {e}")
+        logger.error(f"❌ Erro ao enviar oferta: {e}")
 
 # -------------------------------
 # COMANDOS
@@ -99,25 +139,33 @@ async def start_posting(update, context):
     chat_id = update.effective_chat.id
     job_id = f"posting-{chat_id}"
 
+    logger.info(f"🚀 Comando /iniciar recebido de {chat_id}")
+
     old_job = context.job_queue.get_jobs_by_name(job_id)
     if old_job:
         for job in old_job:
             job.schedule_removal()
+            logger.info(f"🧹 Job antigo removido ({job_id})")
 
-    context.job_queue.run_repeating(postar_oferta, interval=180, first=5, data=chat_id, name=job_id)
+    job = context.job_queue.run_repeating(
+        postar_oferta, interval=180, first=5, data=chat_id, name=job_id
+    )
+
+    logger.info(f"✅ Novo job de postagem criado: {job_id}")
     await update.message.reply_text("✅ Envio automático de ofertas iniciado!")
 
 async def stop_posting(update, context):
     chat_id = update.effective_chat.id
     job_id = f"posting-{chat_id}"
-
     jobs = context.job_queue.get_jobs_by_name(job_id)
+
     if not jobs:
         await update.message.reply_text("⚠️ Nenhum envio ativo encontrado.")
         return
 
     for job in jobs:
         job.schedule_removal()
+    logger.info(f"🛑 Job de postagem removido: {job_id}")
     await update.message.reply_text("🛑 Envio automático de ofertas parado.")
 
 # -------------------------------
@@ -126,23 +174,30 @@ async def stop_posting(update, context):
 async def main():
     logger.info("🚀 Iniciando bot (webhook nativo PTB) ...")
 
+    # Testar API antes de iniciar o bot
+    api_ok = await testar_valueserp()
+    if not api_ok:
+        logger.error("🚫 A ValueSERP API não está funcional. O bot não irá postar ofertas.")
+        # Mesmo assim inicia o bot para responder comandos
+    else:
+        logger.info("✅ ValueSERP testada com sucesso!")
+
     application = ApplicationBuilder().token(TOKEN).build()
 
     scheduler = AsyncIOScheduler()
     scheduler.start()
-    logger.info("Scheduler started")
+    logger.info("✅ Scheduler iniciado")
 
     # Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("iniciar", start_posting))
     application.add_handler(CommandHandler("parar", stop_posting))
 
-    # Configurar webhook corretamente
+    # Configurar webhook
     await application.bot.delete_webhook()
     await application.bot.set_webhook(url=f"{BASE_URL}/webhook/{TOKEN}")
     logger.info(f"🌐 Webhook configurado em: {BASE_URL}/webhook/{TOKEN}")
 
-    # Rodar o webhook (corrigido)
     await application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
@@ -151,18 +206,14 @@ async def main():
     )
 
 # -------------------------------
-# EXECUÇÃO SEGURA
+# EXECUÇÃO
 # -------------------------------
 if __name__ == "__main__":
-    import nest_asyncio
     nest_asyncio.apply()
+    loop = asyncio.get_event_loop()
 
     try:
-        loop = asyncio.get_event_loop()
-        if not loop.is_running():
-            loop.create_task(main())
-            loop.run_forever()
-        else:
-            logger.warning("⚠️ Event loop já estava em execução.")
+        loop.create_task(main())
+        loop.run_forever()
     except (KeyboardInterrupt, SystemExit):
-        pass
+        logger.info("🛑 Bot finalizado manualmente.")

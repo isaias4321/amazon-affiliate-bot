@@ -4,7 +4,7 @@ import random
 import aiohttp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # ===============================
 # 🔧 CONFIGURAÇÕES
@@ -24,7 +24,7 @@ SHOPEE_AFF_LINKS = [
 ML_AFF_ID = "im20250701092308"
 
 # Categorias aleatórias
-CATEGORIAS = ["smartphone", "notebook", "ferramentas", "periféricos gamer"]
+CATEGORIAS = ["smartphone", "notebook", "ferramentas", "periféricos gamer", "teclado", "mouse", "monitor"]
 
 # ===============================
 # LOGS FORMATADOS
@@ -40,9 +40,14 @@ logger = logging.getLogger(__name__)
 # ===============================
 async def buscar_shopee():
     categoria = random.choice(CATEGORIAS)
-    async with aiohttp.ClientSession() as session:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    }
+    async with aiohttp.ClientSession(headers=headers) as session:
         url = f"https://shopee.com.br/api/v4/search/search_items?by=relevancy&limit=20&keyword={categoria}"
         async with session.get(url) as resp:
+            if resp.status != 200:
+                return None
             data = await resp.json()
             if "items" not in data:
                 return None
@@ -67,6 +72,8 @@ async def buscar_mercadolivre():
     async with aiohttp.ClientSession() as session:
         url = f"https://api.mercadolibre.com/sites/MLB/search?q={categoria}&limit=20"
         async with session.get(url) as resp:
+            if resp.status != 200:
+                return None
             data = await resp.json()
             if "results" not in data or not data["results"]:
                 return None
@@ -105,7 +112,10 @@ async def postar_oferta(bot: Bot):
         logger.warning("⚠️ Nenhuma oferta encontrada. Pulando ciclo.")
         return
 
+    prefixo = "🔶 Oferta Shopee do momento!" if oferta["loja"] == "Shopee" else "🔷 Promoção Mercado Livre agora!"
+
     texto = (
+        f"{prefixo}\n\n"
         f"🔥 <b>{oferta['titulo']}</b>\n"
         f"💰 <b>Preço:</b> {oferta['preco']}\n\n"
         f"🏬 <b>Loja:</b> {oferta['loja']}\n"
@@ -129,25 +139,29 @@ async def postar_oferta(bot: Bot):
         logger.error(f"❌ Erro ao enviar oferta: {e}")
 
 # ===============================
-# COMANDO /start
+# COMANDOS
 # ===============================
 async def start(update, context):
-    await update.message.reply_text("🤖 Bot de ofertas iniciado com sucesso!")
+    await update.message.reply_text("🤖 Bot de ofertas iniciado! Use /start_posting para começar as postagens automáticas.")
+
+async def start_posting(update, context):
+    bot = context.bot
+    scheduler = AsyncIOScheduler(timezone="UTC")
+    scheduler.add_job(postar_oferta, "interval", seconds=INTERVALO, args=[bot])
+    scheduler.start()
+    await update.message.reply_text("🚀 Postagens automáticas iniciadas com sucesso!")
+    logger.info("🕒 Postagens automáticas iniciadas via comando /start_posting.")
 
 # ===============================
 # INÍCIO DO BOT
 # ===============================
 async def main():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
-    bot = application.bot
-
-    scheduler = AsyncIOScheduler(timezone="UTC")
-    scheduler.add_job(postar_oferta, "interval", seconds=INTERVALO, args=[bot])
-    scheduler.start()
 
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("start_posting", start_posting))
 
-    logger.info("🚀 Bot iniciado — alternando Shopee ↔ Mercado Livre automaticamente!")
+    logger.info("🚀 Bot carregado — aguardando comandos ou agendamento automático...")
     await application.initialize()
     await application.start()
     await application.updater.start_polling()

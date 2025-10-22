@@ -5,13 +5,14 @@ import aiohttp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.error import Conflict
 
 # ===============================
 # 🔧 CONFIGURAÇÕES
 # ===============================
 BOT_TOKEN = "8463817884:AAE23cMr1605qbMV4c79cMcr8F5dn0ETqRo"
 CHAT_ID = -1003140787649
-INTERVALO = 120  # tempo entre ofertas (2 minutos)
+INTERVALO = 120  # tempo entre ofertas em segundos (2 min)
 
 # Shopee afiliado
 SHOPEE_AFF_LINKS = [
@@ -23,7 +24,7 @@ SHOPEE_AFF_LINKS = [
 # Mercado Livre afiliado
 ML_AFF_ID = "im20250701092308"
 
-# Categorias aleatórias
+# Categorias
 CATEGORIAS = ["smartphone", "notebook", "ferramentas", "periféricos gamer", "teclado", "mouse", "monitor"]
 
 # ===============================
@@ -40,9 +41,7 @@ logger = logging.getLogger(__name__)
 # ===============================
 async def buscar_shopee():
     categoria = random.choice(CATEGORIAS)
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-    }
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     async with aiohttp.ClientSession(headers=headers) as session:
         url = f"https://shopee.com.br/api/v4/search/search_items?by=relevancy&limit=20&keyword={categoria}"
         async with session.get(url) as resp:
@@ -58,7 +57,6 @@ async def buscar_shopee():
             imagem = f"https://down-br.img.susercontent.com/file/{produto['item_basic']['image']}_tn"
             link_afiliado = random.choice(SHOPEE_AFF_LINKS)
 
-            logger.info(f"🟠 [SHOPEE] Produto capturado: {nome[:60]}...")
             return {
                 "loja": "Shopee",
                 "titulo": nome,
@@ -84,7 +82,6 @@ async def buscar_mercadolivre():
             imagem = produto.get("thumbnail", "")
             link_afiliado = f"{produto['permalink']}?utm_source={ML_AFF_ID}"
 
-            logger.info(f"🟡 [MERCADO LIVRE] Produto capturado: {nome[:60]}...")
             return {
                 "loja": "Mercado Livre",
                 "titulo": nome,
@@ -101,40 +98,28 @@ ULTIMO_MARKETPLACE = "mercadolivre"
 async def postar_oferta(bot: Bot):
     global ULTIMO_MARKETPLACE
 
-    if ULTIMO_MARKETPLACE == "mercadolivre":
-        oferta = await buscar_shopee()
-        ULTIMO_MARKETPLACE = "shopee"
-    else:
-        oferta = await buscar_mercadolivre()
-        ULTIMO_MARKETPLACE = "mercadolivre"
+    oferta = await (buscar_shopee() if ULTIMO_MARKETPLACE == "mercadolivre" else buscar_mercadolivre())
+    ULTIMO_MARKETPLACE = "shopee" if ULTIMO_MARKETPLACE == "mercadolivre" else "mercadolivre"
 
     if not oferta:
         logger.warning("⚠️ Nenhuma oferta encontrada. Pulando ciclo.")
         return
 
-    prefixo = "🔶 Oferta Shopee do momento!" if oferta["loja"] == "Shopee" else "🔷 Promoção Mercado Livre agora!"
-
     texto = (
-        f"{prefixo}\n\n"
+        f"🛒 <b>{oferta['loja']}</b> está com oferta!\n\n"
         f"🔥 <b>{oferta['titulo']}</b>\n"
         f"💰 <b>Preço:</b> {oferta['preco']}\n\n"
-        f"🏬 <b>Loja:</b> {oferta['loja']}\n"
-        f"🛒 <b>Compre agora:</b>"
+        f"👉 <a href='{oferta['link']}'>Compre agora</a>"
     )
-
-    botao = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🛍️ Ver oferta", url=oferta["link"])]
-    ])
 
     try:
         await bot.send_photo(
             chat_id=CHAT_ID,
             photo=oferta["imagem"],
             caption=texto,
-            parse_mode="HTML",
-            reply_markup=botao
+            parse_mode="HTML"
         )
-        logger.info(f"✅ Oferta enviada ({oferta['loja']}): {oferta['titulo'][:70]}")
+        logger.info(f"✅ Enviado: {oferta['titulo'][:70]} ({oferta['loja']})")
     except Exception as e:
         logger.error(f"❌ Erro ao enviar oferta: {e}")
 
@@ -142,7 +127,7 @@ async def postar_oferta(bot: Bot):
 # COMANDOS
 # ===============================
 async def start(update, context):
-    await update.message.reply_text("🤖 Bot de ofertas iniciado! Use /start_posting para começar as postagens automáticas.")
+    await update.message.reply_text("🤖 Bot de ofertas ativo! Use /start_posting para iniciar postagens automáticas.")
 
 async def start_posting(update, context):
     bot = context.bot
@@ -150,27 +135,35 @@ async def start_posting(update, context):
     scheduler.add_job(postar_oferta, "interval", seconds=INTERVALO, args=[bot])
     scheduler.start()
     await update.message.reply_text("🚀 Postagens automáticas iniciadas com sucesso!")
-    logger.info("🕒 Postagens automáticas iniciadas via comando /start_posting.")
+    logger.info("🕒 Postagens automáticas ativadas via /start_posting")
 
 # ===============================
-# INÍCIO DO BOT (COM FIX DE CONFLITO)
+# INÍCIO DO BOT (com proteção extra)
 # ===============================
-async def main():
+async def iniciar_bot():
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # ✅ Força o encerramento de qualquer sessão antiga (corrige o 409 Conflict)
+    # 🔧 Remove webhook e atualizações antigas
     await application.bot.delete_webhook(drop_pending_updates=True)
-    logger.info("🧹 Webhook antigo removido — garantindo apenas uma instância ativa.")
+    logger.info("🧹 Webhook e atualizações antigas removidos.")
 
+    # Adiciona comandos
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("start_posting", start_posting))
 
-    logger.info("🚀 Bot carregado — aguardando comandos ou agendamento automático...")
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-    await asyncio.Event().wait()
+    try:
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        logger.info("🚀 Bot iniciado e escutando atualizações.")
+        await asyncio.Event().wait()
+    except Conflict:
+        logger.warning("⚠️ Conflito detectado: outra instância estava ativa. Encerrando webhook antigo...")
+        await application.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("✅ Conflito resolvido. Reiniciando bot...")
+        await iniciar_bot()
+    except Exception as e:
+        logger.error(f"❌ Erro ao iniciar bot: {e}")
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    asyncio.run(iniciar_bot())

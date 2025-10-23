@@ -25,7 +25,7 @@ SHOPEE_AFF_LINKS = [
 # Mercado Livre afiliado
 ML_AFF_ID = "im20250701092308"
 
-# Categorias
+# Categorias de busca
 CATEGORIAS = ["smartphone", "notebook", "ferramentas", "periféricos gamer", "teclado", "mouse", "monitor"]
 
 # ===============================
@@ -41,7 +41,7 @@ print("🧹 Limpando webhooks antigos e atualizações pendentes...")
 requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true")
 
 # ===============================
-# FUNÇÕES DE BUSCA
+# FUNÇÕES DE BUSCA DE OFERTAS
 # ===============================
 async def buscar_shopee():
     categoria = random.choice(CATEGORIAS)
@@ -85,4 +85,77 @@ ULTIMO_MARKETPLACE = "mercadolivre"
 
 async def postar_oferta(bot: Bot):
     global ULTIMO_MARKETPLACE
-    oferta = await
+
+    if ULTIMO_MARKETPLACE == "mercadolivre":
+        oferta = await buscar_shopee()
+        ULTIMO_MARKETPLACE = "shopee"
+    else:
+        oferta = await buscar_mercadolivre()
+        ULTIMO_MARKETPLACE = "mercadolivre"
+
+    if not oferta:
+        logger.warning("⚠️ Nenhuma oferta encontrada. Pulando ciclo.")
+        return
+
+    texto = (
+        f"🛒 <b>{oferta['loja']}</b> está com oferta!\n\n"
+        f"🔥 <b>{oferta['titulo']}</b>\n"
+        f"💰 <b>Preço:</b> {oferta['preco']}\n\n"
+        f"👉 <a href='{oferta['link']}'>Compre agora</a>"
+    )
+
+    try:
+        await bot.send_photo(
+            chat_id=CHAT_ID,
+            photo=oferta["imagem"],
+            caption=texto,
+            parse_mode="HTML"
+        )
+        logger.info(f"✅ Oferta enviada: {oferta['titulo'][:70]} ({oferta['loja']})")
+    except Exception as e:
+        logger.error(f"❌ Erro ao enviar oferta: {e}")
+
+# ===============================
+# COMANDOS DO TELEGRAM
+# ===============================
+async def start(update, context):
+    await update.message.reply_text("🤖 Bot de ofertas ativo! Use /start_posting para iniciar as postagens automáticas.")
+
+async def start_posting(update, context):
+    bot = context.bot
+    scheduler = AsyncIOScheduler(timezone="UTC")
+    scheduler.add_job(postar_oferta, "interval", seconds=INTERVALO, args=[bot])
+    scheduler.start()
+    await update.message.reply_text("🚀 Postagens automáticas iniciadas!")
+    logger.info("🕒 Ciclo automático iniciado via /start_posting")
+
+# ===============================
+# EXECUÇÃO PRINCIPAL
+# ===============================
+async def iniciar_bot():
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # Limpa webhooks antigos e updates pendentes
+    await application.bot.delete_webhook(drop_pending_updates=True)
+    logger.info("🧹 Webhook limpo e atualizações antigas removidas.")
+
+    # Adiciona comandos
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("start_posting", start_posting))
+
+    try:
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        logger.info("🚀 Bot iniciado e escutando comandos.")
+        await asyncio.Event().wait()
+
+    except Conflict:
+        logger.warning("⚠️ Conflito detectado: outra instância ativa. Limpando e reiniciando...")
+        await application.bot.delete_webhook(drop_pending_updates=True)
+        await iniciar_bot()
+    except Exception as e:
+        logger.error(f"❌ Erro crítico ao iniciar: {e}")
+
+if __name__ == "__main__":
+    asyncio.run(iniciar_bot())

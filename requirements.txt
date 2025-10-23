@@ -1,6 +1,7 @@
 # Telegram Bot e dependências assíncronas
 python-telegram-bot[ext,rate-limiter]==20.7
 aiohttp==3.9.5
+python-dotenv
 
 # Agendador de tarefas assíncrono
 APScheduler==3.10.4

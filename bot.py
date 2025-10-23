@@ -1,116 +1,106 @@
 import os
-import random
 import asyncio
 import logging
+import random
 import nest_asyncio
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-
-# Importações das APIs
+from telegram import Bot
+from telegram.ext import Application, CommandHandler
 from shopee_api import buscar_produto_shopee as buscar_shopee
 from mercadolivre_api import buscar_produto_mercadolivre as buscar_mercadolivre
 
-# --- CONFIGURAÇÃO ---
+# ===================== CONFIGURAÇÕES =====================
 load_dotenv()
 nest_asyncio.apply()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID", "-1003140787649")  # Grupo padrão
 
-# Configuração do logger
+INTERVALO = 120  # tempo entre postagens (em segundos)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-# Alternância automática Shopee ↔ Mercado Livre
-fonte_atual = "shopee"
+# Alternância entre lojas
+LOJAS = ["shopee", "mercadolivre"]
+ultima_loja = None
+
 scheduler = AsyncIOScheduler()
 
 
-# --- FUNÇÕES DE OFERTAS ---
-async def postar_oferta(context: ContextTypes.DEFAULT_TYPE):
-    """Posta ofertas alternando entre Shopee e Mercado Livre"""
-    global fonte_atual
-    try:
-        if fonte_atual == "shopee":
-            produto = await buscar_shopee()
-            fonte_atual = "mercadolivre"
-        else:
-            produto = await buscar_mercadolivre()
-            fonte_atual = "shopee"
+# ===================== FUNÇÃO DE POSTAGEM =====================
+async def postar_oferta(bot: Bot):
+    global ultima_loja
 
-        if not produto:
-            logger.warning("⚠️ Nenhuma oferta encontrada. Pulando ciclo.")
-            return
+    loja_atual = "mercadolivre" if ultima_loja == "shopee" else "shopee"
+    ultima_loja = loja_atual
+    logger.info(f"🛍️ Buscando oferta da loja: {loja_atual}")
 
-        mensagem = (
-            f"🔥 *{produto['titulo']}*\n"
-            f"💰 *Preço:* {produto['preco']}\n"
-            f"🛒 *Loja:* {produto['loja']}\n"
-            f"📦 *Categoria:* {produto.get('categoria', 'N/A')}\n"
-            f"👉 [Compre agora]({produto['link']})"
-        )
+    oferta = None
+    if loja_atual == "shopee":
+        oferta = await buscar_shopee()
+    else:
+        oferta = await buscar_mercadolivre()
 
-        await context.bot.send_photo(
-            chat_id=CHAT_ID,
-            photo=produto["imagem"],
-            caption=mensagem,
-            parse_mode="Markdown"
-        )
-        logger.info(f"✅ Oferta enviada ({produto['loja']})")
-
-    except Exception as e:
-        logger.error(f"❌ Erro ao postar oferta: {e}")
-
-
-# --- COMANDOS ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🤖 Olá! Eu sou o bot de ofertas automáticas!\n"
-        "Use /start_posting para começar a postar ofertas."
-    )
-
-
-async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Inicia o agendamento automático"""
-    job_existente = scheduler.get_job("postar_oferta")
-    if job_existente:
-        await update.message.reply_text("⚙️ O bot já está postando automaticamente!")
+    if not oferta:
+        logger.warning("⚠️ Nenhuma oferta encontrada. Pulando ciclo.")
         return
 
-    scheduler.add_job(postar_oferta, "interval", minutes=2, args=[context], id="postar_oferta")
-    scheduler.start()
+    try:
+        msg = (
+            f"🔥 *Oferta {oferta['loja']}!*\n\n"
+            f"*{oferta['titulo']}*\n"
+            f"💰 {oferta['preco']}\n"
+            f"📦 Categoria: {oferta['categoria']}\n\n"
+            f"👉 [Aproveite aqui]({oferta['link']})"
+        )
+        await bot.send_photo(
+            chat_id=CHAT_ID,
+            photo=oferta["imagem"],
+            caption=msg,
+            parse_mode="Markdown"
+        )
+        logger.info(f"✅ Oferta enviada: {oferta['titulo']}")
+    except Exception as e:
+        logger.error(f"❌ Erro ao enviar mensagem: {e}")
 
-    await update.message.reply_text("🕒 Ciclo automático iniciado!")
+
+# ===================== COMANDOS DO BOT =====================
+async def start(update, context):
+    await update.message.reply_text("🤖 Bot ativo! Use /start_posting para iniciar as postagens automáticas.")
 
 
-async def stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Para o ciclo automático"""
-    job = scheduler.get_job("postar_oferta")
-    if job:
-        job.remove()
-        await update.message.reply_text("⏹️ Postagem automática parada.")
-    else:
-        await update.message.reply_text("❌ Nenhum ciclo ativo encontrado.")
+async def start_posting(update, context):
+    if not scheduler.running:
+        scheduler.start()
+
+    scheduler.add_job(
+        postar_oferta,
+        "interval",
+        seconds=INTERVALO,
+        args=[context.bot],
+        id="postar_oferta",
+        replace_existing=True,
+    )
+
+    await update.message.reply_text("🕒 Postagens automáticas iniciadas!")
+    logger.info("🕒 Ciclo automático iniciado via /start_posting")
 
 
-# --- FUNÇÃO PRINCIPAL ---
+# ===================== EXECUÇÃO PRINCIPAL =====================
 async def main():
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    application = Application.builder().token(TOKEN).build()
 
-    # Limpar Webhook e updates antigos
-    await application.bot.delete_webhook()
-    await application.bot.get_updates(offset=-1)
+    # 🔹 LIMPA instâncias antigas e pendências antes de iniciar polling
+    await application.bot.delete_webhook(drop_pending_updates=True)
     logger.info("🧹 Webhook limpo e atualizações antigas removidas.")
 
-    # Registrar comandos
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("start_posting", start_posting))
-    application.add_handler(CommandHandler("stop_posting", stop_posting))
 
     logger.info("🚀 Bot iniciado e escutando comandos.")
     await application.run_polling(close_loop=False)

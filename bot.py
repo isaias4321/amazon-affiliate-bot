@@ -29,12 +29,12 @@ LOJAS = ["shopee", "mercadolivre"]
 ultima_loja = None
 scheduler = AsyncIOScheduler()
 
-# ===================== FUNÇÃO DE BLOQUEIO =====================
+# ===================== BLOQUEIO DE INSTÂNCIAS =====================
 def is_already_running():
-    """Evita múltiplas instâncias do bot rodando ao mesmo tempo"""
+    """Evita múltiplas instâncias do bot rodando ao mesmo tempo."""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        s.bind(("127.0.0.1", 9999))  # trava simples de porta
+        s.bind(("127.0.0.1", 9999))
         return False
     except OSError:
         return True
@@ -44,8 +44,19 @@ def is_already_running():
 async def postar_oferta(bot: Bot):
     global ultima_loja
 
+    # Alternância entre Shopee e Mercado Livre
     loja_atual = "mercadolivre" if ultima_loja == "shopee" else "shopee"
     ultima_loja = loja_atual
+
+    # Mensagem de troca de loja
+    aviso = (
+        "🟠 Alternando para ofertas do Mercado Livre..."
+        if loja_atual == "mercadolivre"
+        else "🟢 Alternando para ofertas da Shopee..."
+    )
+    await bot.send_message(chat_id=CHAT_ID, text=aviso)
+    logger.info(aviso)
+
     logger.info(f"🛍️ Buscando oferta da loja: {loja_atual}")
 
     oferta = None
@@ -79,7 +90,9 @@ async def postar_oferta(bot: Bot):
 
 # ===================== COMANDOS DO BOT =====================
 async def start(update, context):
-    await update.message.reply_text("🤖 Bot ativo! Use /start_posting para iniciar as postagens automáticas.")
+    await update.message.reply_text(
+        "🤖 Bot ativo! Use /start_posting para iniciar as postagens automáticas."
+    )
 
 
 async def start_posting(update, context):
@@ -101,14 +114,13 @@ async def start_posting(update, context):
 
 # ===================== EXECUÇÃO PRINCIPAL =====================
 async def main():
-    # 🧱 BLOQUEIO DE MÚLTIPLAS INSTÂNCIAS
     if is_already_running():
         logger.warning("⚠️ Outra instância do bot já está rodando. Encerrando esta.")
         return
 
     application = Application.builder().token(TOKEN).build()
 
-    # 🔹 LIMPA instâncias antigas e pendências antes de iniciar polling
+    # Limpa Webhook e updates antigos
     await application.bot.delete_webhook(drop_pending_updates=True)
     logger.info("🧹 Webhook limpo e atualizações antigas removidas.")
 

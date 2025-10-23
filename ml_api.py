@@ -2,11 +2,12 @@ import requests
 from bs4 import BeautifulSoup
 import random
 import logging
+import asyncio
 
 # Configuração do log
 logger = logging.getLogger(__name__)
 
-# Categorias principais que o bot irá buscar
+# Categorias que o bot pode buscar
 CATEGORIAS = [
     "eletronicos",
     "eletrodomesticos",
@@ -14,25 +15,32 @@ CATEGORIAS = [
     "pecas-de-computador"
 ]
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/119.0 Safari/537.36"
-    )
-}
+# Lista de User-Agents aleatórios
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:115.0) Gecko/20100101 Firefox/115.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:119.0) Gecko/20100101 Firefox/119.0"
+]
 
 async def buscar_produto_mercadolivre():
     """
-    Busca produtos do Mercado Livre de forma aleatória.
-    Faz scraping simples e retorna título, preço e link do produto.
-    Se for bloqueado (403), retorna None e loga o erro.
+    Faz scraping do Mercado Livre com cabeçalhos aleatórios e atraso para evitar bloqueio.
+    Retorna título, preço e link do produto.
     """
     categoria = random.choice(CATEGORIAS)
     url = f"https://lista.mercadolivre.com.br/{categoria}"
 
+    headers = {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8"
+    }
+
+    # Aguarda um tempo aleatório para simular comportamento humano
+    await asyncio.sleep(random.uniform(1.5, 4.0))
+
     try:
-        response = requests.get(url, headers=HEADERS, timeout=10)
+        response = requests.get(url, headers=headers, timeout=10)
 
         if response.status_code == 403:
             logger.warning("⚠️ Mercado Livre retornou status 403 (acesso bloqueado temporariamente).")
@@ -59,7 +67,6 @@ async def buscar_produto_mercadolivre():
             logger.warning("⚠️ Produto sem informações completas, ignorando.")
             return None
 
-        # Monta o resultado
         produto = {
             "titulo": titulo.text.strip(),
             "preco": preco.text.strip(),

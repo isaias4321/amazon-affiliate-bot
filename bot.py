@@ -1,18 +1,24 @@
 import logging
 import asyncio
-import random
+import os
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from shopee_api import buscar_produto_shopee as buscar_shopee
 from mercadolivre_api import buscar_produto_ml as buscar_mercadolivre
+from dotenv import load_dotenv
 
 # =============================
-# CONFIGURAÇÕES DO BOT
+# CONFIGURAÇÕES E VARIÁVEIS
 # =============================
-TOKEN = "8463817884:AAE23cMr1605qbMV4c79cMcr8F5dn0ETqRo"  # Substitua pelo seu token do BotFather
-CHAT_ID = "-1003140787649"      # Substitua pelo ID do chat do grupo/canal
-INTERVALO_MINUTOS = 2             # Intervalo de postagens automáticas
+load_dotenv()
+
+TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+INTERVALO_MINUTOS = int(os.getenv("INTERVALO_MINUTOS", 2))
+
+scheduler = AsyncIOScheduler()
+loja_atual = "Shopee"
 
 # =============================
 # LOGGING
@@ -24,13 +30,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # =============================
-# VARIÁVEIS DE CONTROLE
-# =============================
-scheduler = AsyncIOScheduler()
-loja_atual = "Shopee"  # alterna Shopee ↔ Mercado Livre
-
-# =============================
-# FUNÇÕES PRINCIPAIS
+# FUNÇÃO DE POSTAGEM AUTOMÁTICA
 # =============================
 async def postar_oferta(context: ContextTypes.DEFAULT_TYPE):
     global loja_atual
@@ -95,18 +95,15 @@ async def stop_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def main():
     application = Application.builder().token(TOKEN).build()
 
-    # Handlers de comandos
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("start_posting", start_posting))
     application.add_handler(CommandHandler("stop_posting", stop_posting))
 
-    # Limpa webhooks e atualizações antigas
     await application.bot.delete_webhook()
     await application.bot.get_updates(offset=-1)
     logger.info("🧹 Webhook limpo e atualizações antigas removidas.")
-
-    # Inicia o bot
     logger.info("🚀 Bot iniciado e escutando comandos.")
+
     await application.run_polling()
 
 # =============================

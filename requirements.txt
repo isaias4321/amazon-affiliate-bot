@@ -8,6 +8,7 @@ APScheduler==3.10.4
 
 # Utilitários do sistema
 asyncio==3.4.3
+nest_asyncio
 
 # Logs coloridos (opcional, mas útil)
 colorlog==6.8.2

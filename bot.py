@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 import random
+import socket
 import nest_asyncio
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -15,9 +16,8 @@ load_dotenv()
 nest_asyncio.apply()
 
 TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID", "-1003140787649")  # Grupo padrão
-
-INTERVALO = 120  # tempo entre postagens (em segundos)
+CHAT_ID = os.getenv("CHAT_ID", "-1003140787649")
+INTERVALO = 120  # tempo entre postagens (segundos)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,11 +25,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Alternância entre lojas
 LOJAS = ["shopee", "mercadolivre"]
 ultima_loja = None
-
 scheduler = AsyncIOScheduler()
+
+# ===================== FUNÇÃO DE BLOQUEIO =====================
+def is_already_running():
+    """Evita múltiplas instâncias do bot rodando ao mesmo tempo"""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", 9999))  # trava simples de porta
+        return False
+    except OSError:
+        return True
 
 
 # ===================== FUNÇÃO DE POSTAGEM =====================
@@ -93,6 +101,11 @@ async def start_posting(update, context):
 
 # ===================== EXECUÇÃO PRINCIPAL =====================
 async def main():
+    # 🧱 BLOQUEIO DE MÚLTIPLAS INSTÂNCIAS
+    if is_already_running():
+        logger.warning("⚠️ Outra instância do bot já está rodando. Encerrando esta.")
+        return
+
     application = Application.builder().token(TOKEN).build()
 
     # 🔹 LIMPA instâncias antigas e pendências antes de iniciar polling

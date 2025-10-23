@@ -7,6 +7,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from shopee_api import buscar_produto_shopee as buscar_shopee
 from mercadolivre_api import buscar_produto_ml as buscar_mercadolivre
 from dotenv import load_dotenv
+import nest_asyncio
 
 # =============================
 # CONFIGURAÇÕES E VARIÁVEIS
@@ -108,12 +109,8 @@ async def main():
     await application.run_polling(close_loop=False)
 
 # =============================
-# EXECUÇÃO SEGURA
+# EXECUÇÃO SEGURA (RAILWAY READY)
 # =============================
 if __name__ == "__main__":
-    try:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(main())
-    except RuntimeError:
-        asyncio.get_event_loop().create_task(main())
-        asyncio.get_event_loop().run_forever()
+    nest_asyncio.apply()  # 👈 evita o erro de loop ativo
+    asyncio.run(main())

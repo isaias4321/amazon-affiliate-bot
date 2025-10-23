@@ -10,8 +10,8 @@ from mercadolivre_api import buscar_produto_ml as buscar_mercadolivre
 # =============================
 # CONFIGURAÇÕES DO BOT
 # =============================
-TOKEN = "SEU_TOKEN_DO_BOT_AQUI"  # Substitua pelo seu token do BotFather
-CHAT_ID = "SEU_CHAT_ID_AQUI"      # Substitua pelo ID do chat do grupo/canal
+TOKEN = "8463817884:AAE23cMr1605qbMV4c79cMcr8F5dn0ETqRo"  # Substitua pelo seu token do BotFather
+CHAT_ID = "-1003140787649"      # Substitua pelo ID do chat do grupo/canal
 INTERVALO_MINUTOS = 2             # Intervalo de postagens automáticas
 
 # =============================

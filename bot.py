@@ -35,25 +35,25 @@ logger = logging.getLogger(__name__)
 async def postar_oferta(context: ContextTypes.DEFAULT_TYPE):
     global loja_atual
 
-    if loja_atual == "Shopee":
-        oferta = await buscar_shopee()
-        loja_atual = "Mercado Livre"
-    else:
-        oferta = await buscar_mercadolivre()
-        loja_atual = "Shopee"
-
-    if not oferta:
-        logger.warning("⚠️ Nenhuma oferta encontrada. Pulando ciclo.")
-        return
-
-    mensagem = (
-        f"🛍️ *{oferta['loja']}* 🔥\n\n"
-        f"*{oferta['titulo']}*\n"
-        f"💰 {oferta['preco']}\n"
-        f"[🛒 Ver oferta]({oferta['link']})"
-    )
-
     try:
+        if loja_atual == "Shopee":
+            oferta = await buscar_shopee()
+            loja_atual = "Mercado Livre"
+        else:
+            oferta = await buscar_mercadolivre()
+            loja_atual = "Shopee"
+
+        if not oferta:
+            logger.warning("⚠️ Nenhuma oferta encontrada. Pulando ciclo.")
+            return
+
+        mensagem = (
+            f"🛍️ *{oferta['loja']}* 🔥\n\n"
+            f"*{oferta['titulo']}*\n"
+            f"💰 {oferta['preco']}\n"
+            f"[🛒 Ver oferta]({oferta['link']})"
+        )
+
         await context.bot.send_photo(
             chat_id=CHAT_ID,
             photo=oferta["imagem"],
@@ -61,8 +61,9 @@ async def postar_oferta(context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
         logger.info(f"✅ Oferta enviada: {oferta['titulo']}")
+
     except Exception as e:
-        logger.error(f"❌ Erro ao enviar mensagem: {e}")
+        logger.error(f"❌ Erro ao postar oferta: {e}")
 
 # =============================
 # COMANDOS DO BOT
@@ -104,10 +105,15 @@ async def main():
     logger.info("🧹 Webhook limpo e atualizações antigas removidas.")
     logger.info("🚀 Bot iniciado e escutando comandos.")
 
-    await application.run_polling()
+    await application.run_polling(close_loop=False)
 
 # =============================
-# EXECUÇÃO
+# EXECUÇÃO SEGURA
 # =============================
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(main())
+    except RuntimeError:
+        asyncio.get_event_loop().create_task(main())
+        asyncio.get_event_loop().run_forever()

@@ -2,19 +2,20 @@ import aiohttp
 import random
 import logging
 
-CATEGORIAS = [
-    "smartphone", "notebook", "fones de ouvido",
-    "teclado gamer", "mouse gamer", "relógio inteligente",
-    "ferramentas", "acessórios femininos"
-]
-
-ML_AFF_ID = "im20250701092308"
 logger = logging.getLogger(__name__)
 
-async def buscar_produto_ml():
-    """Busca produtos reais do Mercado Livre via API pública."""
-    categoria = random.choice(CATEGORIAS)
-    url = f"https://api.mercadolibre.com/sites/MLB/search?q={categoria}&limit=50"
+# IDs das categorias do Mercado Livre (Brasil)
+CATEGORIAS = {
+    "Eletrônicos": "MLB1648",
+    "Eletrodomésticos": "MLB5726",
+    "Ferramentas": "MLB263532",
+    "Peças de Computador": "MLB1649"
+}
+
+async def buscar_produto_mercadolivre():
+    """Busca produtos aleatórios no Mercado Livre (API pública)."""
+    categoria_nome, categoria_id = random.choice(list(CATEGORIAS.items()))
+    url = f"https://api.mercadolibre.com/sites/MLB/search?category={categoria_id}&limit=50"
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -24,24 +25,21 @@ async def buscar_produto_ml():
                     return None
 
                 data = await resp.json()
-                produtos = data.get("results", [])
-                if not produtos:
+                results = data.get("results", [])
+                if not results:
+                    logger.warning("⚠️ Nenhum produto encontrado no Mercado Livre")
                     return None
 
-                produto = random.choice(produtos)
-                nome = produto.get("title", "Produto Mercado Livre")
-                preco = produto.get("price", 0)
-                imagem = produto.get("thumbnail", "")
-                link = f"{produto.get('permalink', '')}?utm_source={ML_AFF_ID}"
-
+                produto = random.choice(results)
                 return {
                     "loja": "Mercado Livre",
-                    "titulo": nome,
-                    "preco": f"R$ {preco:.2f}",
-                    "imagem": imagem,
-                    "link": link
+                    "titulo": produto.get("title"),
+                    "preco": f"R$ {produto.get('price', 0):.2f}",
+                    "imagem": produto.get("thumbnail"),
+                    "link": produto.get("permalink"),
+                    "categoria": categoria_nome
                 }
 
     except Exception as e:
-        logger.error(f"❌ Erro ao buscar produto Mercado Livre: {e}")
+        logger.error(f"❌ Erro ao buscar produto no Mercado Livre: {e}")
         return None

@@ -1,107 +1,109 @@
-# ml_api.py
 import os
 import requests
 import random
 import logging
-from urllib.parse import quote_plus
+from dotenv import load_dotenv
 
+# Carrega as variáveis do .env
+load_dotenv()
+
+# Configura o log
 logger = logging.getLogger(__name__)
 
-# Site id para Brasil
-SITE_ID = "MLB"
+# Tokens e credenciais da API Mercado Livre
+CLIENT_ID = os.getenv("ML_CLIENT_ID", "7518422397227053")
+CLIENT_SECRET = os.getenv("ML_CLIENT_SECRET", "vhfFTrUxj6YOaQJl82nbo4KGxo4IhlWG")
+ACCESS_TOKEN = os.getenv("ML_ACCESS_TOKEN")
+REFRESH_TOKEN = os.getenv("ML_REFRESH_TOKEN")
 
-# User-Agent razoável para evitar bloqueios básicos
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/119.0 Safari/537.36"
-    )
-}
+# Categorias principais
+CATEGORIAS = [
+    "MLB1648",   # Eletrônicos
+    "MLB5726",   # Eletrodomésticos
+    "MLB5672",   # Ferramentas
+    "MLB1649"    # Informática
+]
 
-# Mapeie suas "categorias amigáveis" para consultas de busca.
-# Ajuste os termos conforme a forma que você quer filtrar.
-CATEGORIAS_QUERY_MAP = {
-    "eletronicos": "eletr%C3%B4nicos",
-    "eletrodomesticos": "eletrodom%C3%A9sticos",
-    "ferramentas": "ferramentas",
-    "pecas-de-computador": "pe%C3%A7as+de+computador"
-}
 
-def montar_url_busca_por_categoria(categoria):
+def renovar_token():
     """
-    Monta a URL de busca para a categoria.
-    Usa query simples (q=) mas você pode trocar para category id se tiver.
+    Atualiza o access_token automaticamente usando o refresh_token.
     """
-    if categoria in CATEGORIAS_QUERY_MAP:
-        q = CATEGORIAS_QUERY_MAP[categoria]
-    else:
-        q = quote_plus(categoria)
-    return f"https://api.mercadolibre.com/sites/{SITE_ID}/search?q={q}&limit=50"
+    global ACCESS_TOKEN
 
-def extrair_item_api_ml(item):
-    """
-    Recebe o objeto JSON do item do ML e retorna dicionário padronizado.
-    """
-    titulo = item.get("title")
-    preco = None
-    price_info = item.get("price")
-    if price_info is not None:
-        # price geralmente vem como number
-        preco = f"{price_info:.2f}" if isinstance(price_info, (int, float)) else str(price_info)
-
-    permalink = item.get("permalink")
-    thumbnail = item.get("thumbnail") or item.get("thumbnail_id")
-    # link de imagem maior pode ser construído a partir de thumbnail_id, mas permalink + thumbnail é suficiente
-
-    return {
-        "titulo": titulo or "Produto sem título",
-        "preco": preco or "N/D",
-        "link": permalink or "",
-        "imagem": thumbnail or ""
-    }
-
-def buscar_produto_ml_sync(categoria: str = None):
-    """
-    Versão síncrona que retorna um produto aleatório ou None.
-    - categoria: nome em CATEGORIAS_QUERY_MAP ou string livre.
-    """
-    if categoria is None:
-        categoria = random.choice(list(CATEGORIAS_QUERY_MAP.keys()))
-
-    url = montar_url_busca_por_categoria(categoria)
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=12)
-        if resp.status_code == 403:
-            logger.warning("⚠️ Mercado Livre retornou status 403 (acesso bloqueado).")
-            return None
-        if resp.status_code != 200:
-            logger.warning(f"⚠️ Mercado Livre retornou status {resp.status_code}")
+        response = requests.post(
+            "https://api.mercadolibre.com/oauth/token",
+            data={
+                "grant_type": "refresh_token",
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "refresh_token": REFRESH_TOKEN,
+            },
+            timeout=10
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            ACCESS_TOKEN = data["access_token"]
+            logger.info("🔄 Token do Mercado Livre renovado com sucesso.")
+            return True
+        else:
+            logger.warning(f"⚠️ Falha ao renovar token: {response.status_code}")
+            return False
+    except Exception as e:
+        logger.error(f"❌ Erro ao renovar token: {e}")
+        return False
+
+
+async def buscar_produto_mercadolivre():
+    """
+    Busca um produto aleatório em uma das categorias definidas no Mercado Livre.
+    Usa autenticação via token para evitar bloqueio (403).
+    """
+    categoria = random.choice(CATEGORIAS)
+    url = f"https://api.mercadolibre.com/sites/MLB/search?category={categoria}&limit=20"
+
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+
+        if response.status_code == 401:
+            # Token expirado → tenta renovar e repetir
+            logger.warning("🔑 Token expirado, tentando renovar...")
+            if renovar_token():
+                headers["Authorization"] = f"Bearer {ACCESS_TOKEN}"
+                response = requests.get(url, headers=headers, timeout=10)
+            else:
+                return None
+
+        if response.status_code != 200:
+            logger.warning(f"⚠️ Mercado Livre retornou status {response.status_code}")
             return None
 
-        data = resp.json()
+        data = response.json()
         results = data.get("results", [])
+
         if not results:
-            logger.warning("⚠️ Nenhum resultado retornado pela API do Mercado Livre.")
+            logger.warning("⚠️ Nenhum produto encontrado no Mercado Livre.")
             return None
 
-        # Filtrar itens com permalink e price
-        filtered = [r for r in results if r.get("permalink")]
-        if not filtered:
-            filtered = results
+        produto = random.choice(results)
 
-        item = random.choice(filtered)
-        produto = extrair_item_api_ml(item)
-        logger.info(f"✅ Produto ML encontrado: {produto['titulo']} - R${produto['preco']}")
-        return produto
+        titulo = produto.get("title", "Produto sem título")
+        preco = produto.get("price", "N/A")
+        link = produto.get("permalink", "Sem link")
+
+        resultado = {
+            "titulo": titulo,
+            "preco": f"R$ {preco}",
+            "link": link
+        }
+
+        logger.info(f"✅ Produto encontrado: {titulo} - {resultado['preco']}")
+        return resultado
 
     except Exception as e:
-        logger.exception(f"❌ Erro ao buscar produto no Mercado Livre: {e}")
+        logger.error(f"❌ Erro inesperado ao buscar produto Mercado Livre: {e}")
         return None
-
-# Async wrapper (facilita uso dentro do bot async)
-async def buscar_produto_ml(categoria: str = None):
-    """
-    Wrapper assíncrono (não faz I/O async real, apenas torna compatível com async code).
-    """
-    return buscar_produto_ml_sync(categoria)

@@ -5,10 +5,10 @@ import logging
 from mercadolivre_token import atualizar_token  # Importa o atualizador automático
 
 # Configuração de log
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ml_api")
 logging.basicConfig(level=logging.INFO)
 
-# Categorias para busca aleatória
+# Categorias de busca
 CATEGORIAS = [
     "eletronicos",
     "eletrodomesticos",
@@ -17,36 +17,31 @@ CATEGORIAS = [
 ]
 
 
-def buscar_produto_mercadolivre():
+async def buscar_produto_mercadolivre():
     """
-    Busca produtos no Mercado Livre usando a API oficial com token dinâmico.
-    Se o token expirar, ele será atualizado automaticamente.
+    Busca produtos do Mercado Livre via API oficial.
+    Faz fallback automático (sem token) se houver erro 403.
     """
-
-    access_token = os.getenv("ML_ACCESS_TOKEN")
-
-    # Se não houver token, tenta gerar automaticamente
-    if not access_token:
-        logger.warning("⚠️ Token de acesso do Mercado Livre não configurado, tentando atualizar...")
-        access_token = atualizar_token()
-        if not access_token:
-            logger.error("❌ Não foi possível obter um token de acesso válido.")
-            return None
 
     categoria = random.choice(CATEGORIAS)
     url = f"https://api.mercadolibre.com/sites/MLB/search?q={categoria}"
 
+    access_token = os.getenv("ML_ACCESS_TOKEN")
     headers = {
-        "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
         "User-Agent": "MercadoLivreBot/1.0"
     }
+
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+    else:
+        logger.warning("⚠️ Token de acesso do Mercado Livre não configurado.")
 
     try:
         logger.info(f"🤖 Buscando ofertas na plataforma: MERCADOLIVRE ({categoria})")
         response = requests.get(url, headers=headers, timeout=10)
 
-        # Token expirado → tenta atualizar e refazer a requisição
+        # Token expirado → tenta atualizar automaticamente
         if response.status_code == 401:
             logger.warning("⚠️ Token expirado. Tentando atualizar automaticamente...")
             novo_token = atualizar_token()
@@ -54,12 +49,13 @@ def buscar_produto_mercadolivre():
                 headers["Authorization"] = f"Bearer {novo_token}"
                 response = requests.get(url, headers=headers, timeout=10)
 
-        # Se ainda der erro 403 → sem permissão ou bloqueio temporário
+        # 403 → tenta sem token
         if response.status_code == 403:
-            logger.warning("⚠️ Erro da API Mercado Livre: 403 (acesso bloqueado ou token inválido).")
-            return None
+            logger.warning("⚠️ Erro 403. Tentando novamente sem token (modo público)...")
+            headers.pop("Authorization", None)
+            response = requests.get(url, headers=headers, timeout=10)
 
-        # Se outro erro HTTP
+        # Outros erros
         if response.status_code != 200:
             logger.warning(f"⚠️ Erro da API Mercado Livre: {response.status_code}")
             return None
@@ -71,7 +67,6 @@ def buscar_produto_mercadolivre():
             logger.warning("⚠️ Nenhuma oferta encontrada. Pulando ciclo.")
             return None
 
-        # Escolhe produto aleatório
         produto = random.choice(results)
         titulo = produto.get("title", "Produto sem título")
         preco = produto.get("price", "Preço não informado")

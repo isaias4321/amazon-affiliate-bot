@@ -8,28 +8,41 @@ from mercadolivre_token import atualizar_token  # Importa o atualizador automát
 logger = logging.getLogger("ml_api")
 logging.basicConfig(level=logging.INFO)
 
-# Categorias de busca
+# Categorias para sortear buscas
 CATEGORIAS = [
     "eletronicos",
     "eletrodomesticos",
     "ferramentas",
-    "pecas-de-computador"
+    "pecas-de-computador",
+    "informatica",
+    "acessorios",
+    "smartphones"
 ]
 
 
 async def buscar_produto_mercadolivre():
     """
     Busca produtos do Mercado Livre via API oficial.
-    Faz fallback automático (sem token) se houver erro 403.
+    Evita bloqueios 403 e tenta modo público se necessário.
     """
 
     categoria = random.choice(CATEGORIAS)
     url = f"https://api.mercadolibre.com/sites/MLB/search?q={categoria}"
 
     access_token = os.getenv("ML_ACCESS_TOKEN")
+
+    # Headers "disfarçados" de navegador real
     headers = {
-        "Content-Type": "application/json",
-        "User-Agent": "MercadoLivreBot/1.0"
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/126.0.0.0 Safari/537.36"
+        ),
     }
 
     if access_token:
@@ -49,13 +62,12 @@ async def buscar_produto_mercadolivre():
                 headers["Authorization"] = f"Bearer {novo_token}"
                 response = requests.get(url, headers=headers, timeout=10)
 
-        # 403 → tenta sem token
+        # Se ainda 403 → tenta modo público
         if response.status_code == 403:
             logger.warning("⚠️ Erro 403. Tentando novamente sem token (modo público)...")
             headers.pop("Authorization", None)
             response = requests.get(url, headers=headers, timeout=10)
 
-        # Outros erros
         if response.status_code != 200:
             logger.warning(f"⚠️ Erro da API Mercado Livre: {response.status_code}")
             return None

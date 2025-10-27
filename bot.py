@@ -1,102 +1,84 @@
 import os
-import asyncio
 import logging
-from telegram import Update, Bot
+from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from flask import Flask, request
+import threading
+import asyncio
 from ml_api import buscar_produto_mercadolivre
 from shopee_api import buscar_produto_shopee
-from datetime import datetime
 
 # Configuração de logs
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Inicializa o agendador
-scheduler = AsyncIOScheduler()
+TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # URL pública do seu Railway
+PORT = int(os.getenv("PORT", 8080))
 
-# Variáveis de ambiente
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+# Cria app Flask para webhook
+app = Flask(__name__)
 
-
-# 🧹 Remove webhooks antigos antes de iniciar o bot
-async def limpar_webhook(bot_token: str):
-    bot = Bot(token=bot_token)
-    try:
-        await bot.delete_webhook()
-        logger.info("🧹 Limpando webhook anterior...")
-    except Exception as e:
-        logger.warning(f"⚠️ Não foi possível limpar webhook: {e}")
+# Cria app Telegram
+application = Application.builder().token(TOKEN).build()
 
 
-# 🛒 Função principal de postagens automáticas
-async def postar_oferta(context: ContextTypes.DEFAULT_TYPE):
-    plataformas = ["MERCADOLIVRE", "SHOPEE"]
-    plataforma = plataformas[datetime.utcnow().second % 2]
+# 🔹 Comando /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🤖 Olá! Eu sou seu bot de ofertas! Use /oferta para ver uma promoção!")
 
-    logger.info(f"🤖 Buscando ofertas na plataforma: {plataforma}")
 
-    if plataforma == "MERCADOLIVRE":
-        produto = await buscar_produto_mercadolivre()
-    else:
+# 🔹 Comando /oferta
+async def oferta(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔎 Buscando ofertas...")
+
+    # Busca primeiro no Mercado Livre
+    produto = await buscar_produto_mercadolivre()
+    if not produto:
+        # Se não achar, tenta Shopee
         produto = await buscar_produto_shopee()
 
-    if not produto:
-        logger.warning("⚠️ Nenhuma oferta encontrada. Pulando ciclo.")
-        return
-
-    mensagem = (
-        f"🔥 *OFERTA ENCONTRADA!*\n\n"
-        f"🛍️ *{produto['titulo']}*\n"
-        f"💰 R${produto['preco']}\n"
-        f"🔗 [Ver no site]({produto['link']})"
-    )
-
-    await context.bot.send_message(
-        chat_id=CHAT_ID,
-        text=mensagem,
-        parse_mode="Markdown",
-        disable_web_page_preview=False,
-    )
+    if produto:
+        mensagem = f"🔥 OFERTA ENCONTRADA!\n\n🛍️ {produto['titulo']}\n💰 {produto['preco']}\n🔗 {produto['link']}"
+        await update.message.reply_text(mensagem)
+    else:
+        await update.message.reply_text("⚠️ Nenhuma oferta encontrada no momento.")
 
 
-# 🧠 Comando /start para testar o bot
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Olá! O bot está ativo e monitorando ofertas.")
+# Registra comandos
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("oferta", oferta))
 
 
-# 🚀 Função principal
-async def main():
-    if not TOKEN:
-        logger.error("❌ TELEGRAM_TOKEN não configurado!")
-        return
-
-    await limpar_webhook(TOKEN)
-
-    application = Application.builder().token(TOKEN).build()
-
-    # Comandos do bot
-    application.add_handler(CommandHandler("start", start))
-
-    # Agendamento automático de postagens
-    scheduler.add_job(postar_oferta, "interval", minutes=2, args=[application.bot])
-    scheduler.start()
-
-    logger.info("🚀 Bot iniciado e escutando comandos.")
-    await application.run_polling(close_loop=False)
+# 🔹 Endpoint do Webhook (onde o Telegram envia as mensagens)
+@app.route(f"/webhook/{TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    asyncio.run(application.process_update(update))
+    return "ok", 200
 
 
-# 🧠 Corrige o erro “RuntimeError: event loop is already running”
+# 🔹 Endpoint raiz (só pra testar se o app está rodando)
+@app.route("/", methods=["GET"])
+def home():
+    return "🤖 Bot rodando com Webhook!", 200
+
+
+# 🔹 Função para iniciar o bot com o Webhook ativo
+async def setup_webhook():
+    logger.info("🧹 Limpando webhooks antigos...")
+    await application.bot.delete_webhook(drop_pending_updates=True)
+    full_url = f"{WEBHOOK_URL}/webhook/{TOKEN}"
+    await application.bot.set_webhook(url=full_url)
+    logger.info(f"✅ Webhook configurado com sucesso: {full_url}")
+
+
+def start_bot():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(setup_webhook())
+    app.run(host="0.0.0.0", port=PORT)
+
+
 if __name__ == "__main__":
-    import nest_asyncio
-
-    nest_asyncio.apply()
-
-    try:
-        asyncio.get_event_loop().run_until_complete(main())
-    except KeyboardInterrupt:
-        logger.info("🛑 Bot encerrado manualmente.")
+    threading.Thread(target=start_bot).start()

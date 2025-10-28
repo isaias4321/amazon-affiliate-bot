@@ -25,11 +25,18 @@ application = Application.builder().token(TOKEN).build()
 # =====================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Bot ativo e pronto para postar ofertas! Use /start_posting para iniciar as postagens automáticas.")
+    user = update.effective_user
+    logger.info(f"📩 /start recebido de @{user.username or user.first_name}")
+    await update.message.reply_text(
+        "🤖 Bot ativo e pronto para postar ofertas!\n"
+        "Use /start_posting para iniciar as postagens automáticas."
+    )
 
 async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    logger.info(f"🚀 /start_posting recebido de @{user.username or user.first_name}")
     await update.message.reply_text("🚀 Postagens automáticas iniciadas!")
-    # Aqui você pode chamar sua função de buscar e postar ofertas manualmente se quiser.
+    # Aqui você pode chamar manualmente a função de postar ofertas
     # Exemplo: await postar_oferta()
 
 application.add_handler(CommandHandler("start", start))
@@ -41,8 +48,9 @@ application.add_handler(CommandHandler("start_posting", start_posting))
 
 async def postar_oferta():
     logger.info("🤖 Buscando e postando ofertas automaticamente...")
-    # Aqui entraria a integração com Shopee / Mercado Livre
-    # Exemplo: ofertas = buscar_produtos()
+    # Aqui vai a lógica para buscar ofertas das APIs
+    # Exemplo:
+    # ofertas = buscar_produtos()
     # await bot.send_message(chat_id=SEU_CHAT_ID, text=f"Nova oferta: {ofertas[0]['titulo']}")
     pass
 
@@ -51,14 +59,19 @@ scheduler.add_job(lambda: asyncio.run(postar_oferta()), "interval", minutes=2)
 scheduler.start()
 
 # =====================================
-# 🌐 FLASK WEBHOOK
+# 🌐 FLASK WEBHOOK (corrigido)
 # =====================================
 
 @app.route(f"/webhook/{TOKEN}", methods=["POST"])
-def webhook():
-    """Recebe atualizações do Telegram e as repassa ao bot."""
-    update = Update.de_json(request.get_json(force=True), application.bot)
-    application.update_queue.put_nowait(update)
+async def webhook():
+    """Recebe atualizações do Telegram e as processa de forma assíncrona."""
+    try:
+        data = request.get_json(force=True)
+        update = Update.de_json(data, application.bot)
+        await application.process_update(update)
+        logger.info("✅ Update recebido e processado com sucesso.")
+    except Exception as e:
+        logger.error(f"❌ Erro ao processar update: {e}")
     return "ok", 200
 
 @app.route("/")
@@ -66,7 +79,7 @@ def index():
     return "🤖 Bot está rodando com Flask + Webhook!", 200
 
 # =====================================
-# 🚀 EXECUÇÃO
+# 🚀 EXECUÇÃO PRINCIPAL
 # =====================================
 
 if __name__ == "__main__":

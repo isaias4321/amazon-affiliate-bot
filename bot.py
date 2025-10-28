@@ -1,90 +1,83 @@
 import os
-import asyncio
 import logging
+import asyncio
 from flask import Flask, request
-from telegram import Update, Bot
+from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from ml_api import buscar_produto_mercadolivre
-from shopee_api import buscar_produto_shopee
+from apscheduler.schedulers.background import BackgroundScheduler
 
-# ========== CONFIGURAÇÃO ==========
-PORT = int(os.environ.get("PORT", 8080))
-TOKEN = os.environ.get("BOT_TOKEN")
-
-app = Flask(__name__)
+# =========================
+# 🔧 CONFIGURAÇÕES INICIAIS
+# =========================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-scheduler = AsyncIOScheduler()
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+if not TOKEN:
+    raise ValueError("❌ TELEGRAM_TOKEN não configurado no Railway!")
 
-# ========== FUNÇÕES DO BOT ==========
+app = Flask(__name__)
+scheduler = BackgroundScheduler()
+application = Application.builder().token(TOKEN).build()
+
+# =====================================
+# 🤖 COMANDOS DO TELEGRAM
+# =====================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Olá! Estou ativo e pronto para buscar ofertas automaticamente!")
+    await update.message.reply_text("🤖 Bot ativo e pronto para postar ofertas! Use /start_posting para iniciar as postagens automáticas.")
 
-async def oferta(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 Buscando ofertas...")
+async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🚀 Postagens automáticas iniciadas!")
+    # Aqui você pode chamar sua função de buscar e postar ofertas manualmente se quiser.
+    # Exemplo: await postar_oferta()
 
-    produto = await buscar_produto_mercadolivre()
-    if not produto:
-        produto = await buscar_produto_shopee()
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("start_posting", start_posting))
 
-    if produto:
-        msg = f"💥 {produto['titulo']}\n💰 R$ {produto['preco']}\n🔗 {produto['link']}"
-    else:
-        msg = "⚠️ Nenhuma oferta encontrada no momento."
-
-    await update.message.reply_text(msg)
-
-# ========== AGENDAMENTO ==========
+# =====================================
+# 🔁 FUNÇÃO AUTOMÁTICA (POSTAR OFERTAS)
+# =====================================
 
 async def postar_oferta():
-    logger.info("🕐 Executando tarefa automática de postagem de oferta...")
-    produto = await buscar_produto_mercadolivre() or await buscar_produto_shopee()
-    if produto:
-        bot = Bot(token=TOKEN)
-        msg = f"🔥 Oferta do momento:\n\n💥 {produto['titulo']}\n💰 R$ {produto['preco']}\n🔗 {produto['link']}"
-        await bot.send_message(chat_id="@seu_canal_aqui", text=msg)
-        logger.info("✅ Oferta postada com sucesso!")
-    else:
-        logger.warning("⚠️ Nenhuma oferta encontrada para postar.")
+    logger.info("🤖 Buscando e postando ofertas automaticamente...")
+    # Aqui entraria a integração com Shopee / Mercado Livre
+    # Exemplo: ofertas = buscar_produtos()
+    # await bot.send_message(chat_id=SEU_CHAT_ID, text=f"Nova oferta: {ofertas[0]['titulo']}")
+    pass
 
-# ========== CONFIGURAÇÃO DO TELEGRAM ==========
-application = Application.builder().token(TOKEN).build()
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("oferta", oferta))
+# Agendador automático (a cada 2 minutos)
+scheduler.add_job(lambda: asyncio.run(postar_oferta()), "interval", minutes=2)
+scheduler.start()
 
-# ========== WEBHOOK FLASK ==========
+# =====================================
+# 🌐 FLASK WEBHOOK
+# =====================================
+
 @app.route(f"/webhook/{TOKEN}", methods=["POST"])
-async def webhook():
-    data = request.get_json(force=True)
-    update = Update.de_json(data, application.bot)
-    await application.process_update(update)
-    return "ok"
+def webhook():
+    """Recebe atualizações do Telegram e as repassa ao bot."""
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    application.update_queue.put_nowait(update)
+    return "ok", 200
 
-async def setup_webhook():
-    logger.info("🧹 Limpando webhooks antigos...")
-    await application.bot.delete_webhook(drop_pending_updates=True)
+@app.route("/")
+def index():
+    return "🤖 Bot está rodando com Flask + Webhook!", 200
 
-    url = f"https://{os.environ.get('RAILWAY_STATIC_URL')}/webhook/{TOKEN}"
-    await application.bot.set_webhook(url)
-    logger.info(f"✅ Webhook configurado com sucesso: {url}")
+# =====================================
+# 🚀 EXECUÇÃO
+# =====================================
 
-# ========== INICIALIZAÇÃO ==========
 if __name__ == "__main__":
-    async def start_async():
-        try:
-            await setup_webhook()
-        except Exception as e:
-            logger.error(f"❌ Erro ao configurar webhook: {e}")
-
+    logger.info("🧹 Limpando webhooks antigos...")
     loop = asyncio.get_event_loop()
-    loop.create_task(start_async())
+    loop.run_until_complete(application.bot.delete_webhook(drop_pending_updates=True))
 
-    # Inicia o agendador
-    scheduler.add_job(postar_oferta, "interval", minutes=2)
-    scheduler.start()
+    logger.info("🌍 Configurando webhook atual...")
+    webhook_url = f"https://amazon-ofertas-api.up.railway.app/webhook/{TOKEN}"
+    loop.run_until_complete(application.bot.set_webhook(url=webhook_url))
+    logger.info(f"✅ Webhook configurado: {webhook_url}")
 
-    # Inicia o Flask
-    app.run(host="0.0.0.0", port=PORT)
+    logger.info("🚀 Bot iniciado e escutando comandos!")
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))

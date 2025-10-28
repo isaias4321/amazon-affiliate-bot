@@ -34,17 +34,26 @@ application = Application.builder().token(TOKEN).build()
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("start_posting", start_posting))
 
-# ------------------------- WEBHOOK SÍNCRONO -------------------------
+# ------------------------- WEBHOOK CORRIGIDO -------------------------
 @app.route(f"/webhook/{TOKEN}", methods=["POST"])
 def webhook():
     """Versão síncrona — compatível com Flask normal"""
     try:
         data = request.get_json(force=True)
         update = Update.de_json(data, application.bot)
-        asyncio.run(application.process_update(update))
-        logger.info("✅ Update recebido e processado com sucesso (modo síncrono).")
+
+        async def process():
+            # Garante que o Application foi inicializado antes de processar
+            if not application.running:
+                await application.initialize()
+            await application.process_update(update)
+
+        asyncio.run(process())
+        logger.info("✅ Update recebido e processado com sucesso (modo síncrono com initialize).")
+
     except Exception as e:
         logger.error(f"❌ Erro ao processar update: {e}")
+
     return "ok", 200
 
 # ------------------------- CONFIGURAÇÃO DE TAREFAS -------------------------

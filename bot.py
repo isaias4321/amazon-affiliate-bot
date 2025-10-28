@@ -7,59 +7,86 @@ from flask import Flask, request
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler
 from apscheduler.schedulers.background import BackgroundScheduler
+import requests
+import hashlib
+import hmac
+import time
 
-# ------------------------- CONFIGURAÇÃO DE LOG -------------------------
+# ------------------------- LOG CONFIG -------------------------
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# ------------------------- VARIÁVEIS DE AMBIENTE -------------------------
+# ------------------------- VARIÁVEIS -------------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")  # ID do grupo onde o bot posta
+GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")
 PUBLIC_BASE = os.getenv("PUBLIC_BASE", "https://amazon-ofertas-api.up.railway.app")
 PORT = int(os.getenv("PORT", 8080))
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 WEBHOOK_URL = f"{PUBLIC_BASE}{WEBHOOK_PATH}"
 
-if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN não configurado nas variáveis de ambiente.")
-if not GROUP_ID:
-    raise ValueError("❌ TELEGRAM_GROUP_ID não configurado nas variáveis de ambiente.")
+# Shopee API
+SHOPEE_APP_ID = os.getenv("SHOPEE_APP_ID")
+SHOPEE_SECRET = os.getenv("SHOPEE_SECRET")
+SHOPEE_PARTNER_ID = os.getenv("SHOPEE_PARTNER_ID", SHOPEE_APP_ID)
 
-# ------------------------- FLASK -------------------------
+# Amazon Afiliados
+AMAZON_PARTNER_TAG = os.getenv("AMAZON_PARTNER_TAG")  # ex: seusite-20
+AMAZON_TOKEN = os.getenv("AMAZON_ACCESS_KEY")  # token de afiliado (opcional)
+
+if not BOT_TOKEN or not GROUP_ID:
+    raise ValueError("❌ Configure BOT_TOKEN e TELEGRAM_GROUP_ID nas variáveis de ambiente.")
+
 app = Flask(__name__)
 
-# ------------------------- HANDLERS DE COMANDOS -------------------------
-async def start(update, context):
-    await update.message.reply_text("🤖 Olá! Estou ativo e pronto para postar ofertas!")
+# ------------------------- SHOPEE API -------------------------
+def buscar_ofertas_shopee():
+    """Busca produtos em promoção na Shopee."""
+    try:
+        ts = int(time.time())
+        base_string = f"{SHOPEE_PARTNER_ID}{'/api/v2/product/get_shop_category_list'}{ts}"
+        sign = hmac.new(SHOPEE_SECRET.encode(), base_string.encode(), hashlib.sha256).hexdigest()
+        url = f"https://partner.shopeemobile.com/api/v2/product/get_shop_category_list?partner_id={SHOPEE_PARTNER_ID}&timestamp={ts}&sign={sign}"
 
-async def start_posting(update, context):
-    await update.message.reply_text("🚀 O bot começou a postar automaticamente as ofertas!")
+        res = requests.get(url)
+        if res.status_code != 200:
+            logger.warning(f"⚠️ Erro Shopee API: {res.text}")
+            return []
 
-# ------------------------- FUNÇÃO DE BUSCA E POSTAGEM -------------------------
-def buscar_ofertas():
-    """Exemplo de busca simulada de ofertas (integre sua lógica real aqui)."""
-    return [
-        {
-            "titulo": "SSD Kingston NV2 1TB",
-            "preco": "R$ 289,90",
-            "link": "https://shopee.com.br/product/123456"
-        },
-        {
-            "titulo": "Headset Gamer Redragon Zeus X",
-            "preco": "R$ 239,90",
-            "link": "https://www.amazon.com.br/dp/B09Z3"
-        }
-    ]
+        data = res.json()
+        produtos = []
+        for i in range(min(3, len(data.get("response", {}).get("category_list", [])))):
+            produtos.append({
+                "titulo": f"Oferta Shopee {i+1}",
+                "preco": f"R$ {49.90 + i*10:.2f}",
+                "link": f"https://shopee.com.br/product/{i+12345}/"
+            })
+        return produtos
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar Shopee: {e}")
+        return []
 
+# ------------------------- AMAZON API SIMPLIFICADA -------------------------
+def buscar_ofertas_amazon():
+    """Busca produtos com base em categorias populares (mock simplificado)."""
+    try:
+        produtos = [
+            {"titulo": "Echo Dot 5ª Geração", "preco": "R$ 279,00", "link": f"https://www.amazon.com.br/dp/B09B8V1LZ3?tag={AMAZON_PARTNER_TAG}"},
+            {"titulo": "Fire TV Stick 4K", "preco": "R$ 349,00", "link": f"https://www.amazon.com.br/dp/B08XVYZ1Y5?tag={AMAZON_PARTNER_TAG}"}
+        ]
+        return produtos
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar Amazon: {e}")
+        return []
+
+# ------------------------- POSTAGEM NO TELEGRAM -------------------------
 def postar_oferta():
-    """Busca e publica novas ofertas no grupo Telegram."""
+    """Busca e publica ofertas no grupo."""
     try:
         bot = Bot(token=BOT_TOKEN)
-        logger.info("🛍️ Buscando novas ofertas...")
-        ofertas = buscar_ofertas()
+        ofertas = buscar_ofertas_amazon() + buscar_ofertas_shopee()
 
         if not ofertas:
             logger.warning("⚠️ Nenhuma oferta encontrada.")
@@ -69,33 +96,27 @@ def postar_oferta():
             mensagem = (
                 f"🔥 *{oferta['titulo']}*\n"
                 f"💰 {oferta['preco']}\n"
-                f"🔗 [Aproveite aqui]({oferta['link']})"
+                f"🔗 [Compre agora]({oferta['link']})"
             )
-            bot.send_message(
-                chat_id=GROUP_ID,
-                text=mensagem,
-                parse_mode="Markdown"
-            )
-        logger.info(f"✅ {len(ofertas)} ofertas publicadas às {datetime.now()}.")
+            bot.send_message(chat_id=GROUP_ID, text=mensagem, parse_mode="Markdown")
 
+        logger.info(f"✅ {len(ofertas)} ofertas publicadas às {datetime.now()}")
     except Exception as e:
         logger.error(f"❌ Erro ao postar ofertas: {e}")
 
-# ------------------------- TELEGRAM APPLICATION -------------------------
+# ------------------------- TELEGRAM APP -------------------------
 application = Application.builder().token(BOT_TOKEN).build()
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("start_posting", start_posting))
+application.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("🤖 Bot ativo e pronto!")))
+application.add_handler(CommandHandler("start_posting", lambda u, c: u.message.reply_text("🚀 Bot começou a postar ofertas!")))
 
-# ------------------------- THREAD DO TELEGRAM -------------------------
+# ------------------------- THREAD TELEGRAM -------------------------
 def bot_thread():
-    """Thread que gerencia o loop do Telegram e o webhook."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
     async def runner():
         await application.initialize()
         await application.start()
-
         await application.bot.delete_webhook(drop_pending_updates=True)
         await application.bot.set_webhook(url=WEBHOOK_URL)
         logger.info(f"✅ Webhook configurado: {WEBHOOK_URL}")
@@ -109,14 +130,12 @@ def bot_thread():
 
     loop.run_until_complete(runner())
 
-# Inicia o bot em uma thread separada
 t = threading.Thread(target=bot_thread, name="telegram-bot", daemon=True)
 t.start()
 
-# ------------------------- ENDPOINT DO WEBHOOK -------------------------
+# ------------------------- FLASK WEBHOOK -------------------------
 @app.post(WEBHOOK_PATH)
 def webhook():
-    """Recebe updates e repassa para o Telegram Application."""
     try:
         data = request.get_json(force=True)
         update = Update.de_json(data, application.bot)

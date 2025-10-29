@@ -23,11 +23,11 @@ WEBHOOK_BASE = os.getenv("WEBHOOK_BASE", "").rstrip("/")
 PORT = int(os.getenv("PORT", 8080))
 
 # Mercado Livre
-ML_APP_ID = os.getenv("ML_APP_ID")            # id da aplicação
-ML_SECRET = os.getenv("ML_SECRET")            # secret
-ML_USER_ID = os.getenv("ML_USER_ID")          # opcional, só pra logs
-ML_NICK = os.getenv("ML_NICK", "oficial")     # para link afiliado
-ML_CATEGORIAS = ["MLB1648", "MLB1648", "MLB263532", "MLB1132"]  # ex: eletrônicos, peças PC, eletro, ferramentas
+ML_APP_ID = os.getenv("ML_APP_ID")
+ML_SECRET = os.getenv("ML_SECRET")
+ML_USER_ID = os.getenv("ML_USER_ID")
+ML_NICK = os.getenv("ML_NICK", "oficial")
+ML_CATEGORIAS = ["MLB1648", "MLB263532", "MLB1132", "MLB1809"]  # Eletrônicos, PC, Eletrodomésticos, Ferramentas
 
 # Shopee (opcional)
 SHOPEE_PARTNER_ID = os.getenv("SHOPEE_PARTNER_ID")
@@ -37,7 +37,7 @@ SHOPEE_SHOP_ID = os.getenv("SHOPEE_SHOP_ID")
 POST_INTERVAL = int(os.getenv("POST_INTERVAL_SECONDS", "120"))
 
 if not TOKEN:
-    raise RuntimeError("Configure TELEGRAM_BOT_TOKEN no .env")
+    raise RuntimeError("❌ Configure TELEGRAM_BOT_TOKEN no .env")
 
 # --- APP TELEGRAM ---
 app_tg = ApplicationBuilder().token(TOKEN).build()
@@ -83,9 +83,7 @@ async def buscar_ofertas_ml() -> List[Dict]:
                 if r.status_code != 200:
                     continue
                 for it in r.json().get("results", []):
-                    link = it["permalink"]
-                    # adiciona tag afiliado simples
-                    link += f"?utm_source={ML_NICK}"
+                    link = it["permalink"] + f"?utm_source={ML_NICK}"
                     resultados.append({
                         "fonte": "MERCADO LIVRE",
                         "titulo": it["title"],
@@ -98,7 +96,7 @@ async def buscar_ofertas_ml() -> List[Dict]:
         return []
 
 async def buscar_ofertas_shopee() -> List[Dict]:
-    """Retorna lista fake se Shopee não configurada."""
+    """Retorna ofertas da Shopee (se configurada)."""
     if not (SHOPEE_PARTNER_ID and SHOPEE_PARTNER_KEY and SHOPEE_SHOP_ID):
         return []
     try:
@@ -126,6 +124,7 @@ async def buscar_ofertas_shopee() -> List[Dict]:
         return []
 
 async def postar_ofertas():
+    """Publica ofertas no Telegram."""
     try:
         ofertas = await buscar_ofertas_ml()
         ofertas += await buscar_ofertas_shopee()
@@ -165,10 +164,22 @@ def ok():
 
 @flask_app.post(f"/webhook/{TOKEN}")
 async def webhook():
-    data = request.get_json(force=True)
-    update = Update.de_json(data, app_tg.bot)
-    await app_tg.process_update(update)
-    return jsonify({"ok": True}), 200
+    try:
+        data = request.get_json(force=True)
+        update = Update.de_json(data, app_tg.bot)
+
+        # 🔧 Corrige erro “Application not initialized”
+        if not app_tg._initialized:
+            logger.info("⚙️ Inicializando Application (lazy)...")
+            await app_tg.initialize()
+        if not app_tg.running:
+            await app_tg.start()
+
+        await app_tg.process_update(update)
+        return jsonify({"ok": True}), 200
+    except Exception as e:
+        logger.exception("❌ Erro ao processar update")
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 async def setup_webhook():
     await app_tg.bot.delete_webhook(drop_pending_updates=True)

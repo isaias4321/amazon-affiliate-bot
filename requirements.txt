@@ -1,5 +1,5 @@
 quart==0.19.5
-Flask==2.3.3
+Flask==3.0.0
 python-telegram-bot==20.8
 requests==2.31.0
 beautifulsoup4==4.12.2

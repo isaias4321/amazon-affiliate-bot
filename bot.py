@@ -1,4 +1,4 @@
-import os, logging, asyncio, time, hmac, hashlib, json
+import os, logging, asyncio, time, hmac, hashlib, json, random
 from datetime import datetime
 from typing import List, Dict
 from dotenv import load_dotenv
@@ -16,20 +16,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- VARIÁVEIS ---
+# --- CONFIGURAÇÕES ---
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 WEBHOOK_BASE = os.getenv("WEBHOOK_BASE", "").rstrip("/")
 PORT = int(os.getenv("PORT", 8080))
 
 # Mercado Livre
-ML_APP_ID = os.getenv("ML_APP_ID")
-ML_SECRET = os.getenv("ML_SECRET")
-ML_USER_ID = os.getenv("ML_USER_ID")
 ML_NICK = os.getenv("ML_NICK", "oficial")
-ML_CATEGORIAS = ["MLB1648", "MLB263532", "MLB1132", "MLB1809"]  # Eletrônicos, PC, Eletrodomésticos, Ferramentas
+ML_CATEGORIAS = ["MLB1648", "MLB263532", "MLB1132", "MLB1809"]
 
-# Shopee (opcional)
+# Shopee
 SHOPEE_PARTNER_ID = os.getenv("SHOPEE_PARTNER_ID")
 SHOPEE_PARTNER_KEY = os.getenv("SHOPEE_PARTNER_KEY")
 SHOPEE_SHOP_ID = os.getenv("SHOPEE_SHOP_ID")
@@ -39,10 +36,11 @@ POST_INTERVAL = int(os.getenv("POST_INTERVAL_SECONDS", "120"))
 if not TOKEN:
     raise RuntimeError("❌ Configure TELEGRAM_BOT_TOKEN no .env")
 
-# --- APP TELEGRAM ---
+# --- TELEGRAM ---
 app_tg = ApplicationBuilder().token(TOKEN).build()
 POSTING_ON = set()
 
+# --- COMANDOS ---
 async def cmd_start(update: Update, _: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 Bot de Ofertas!\n"
@@ -72,8 +70,12 @@ app_tg.add_handler(CommandHandler("stop_posting", cmd_stop_posting))
 app_tg.add_handler(CommandHandler("status", cmd_status))
 
 # --- FUNÇÕES DE OFERTAS ---
+async def encurtar_link(url: str) -> str:
+    """Gera link encurtado aleatório tipo ml.ofr.link/xxxxx."""
+    sufixo = ''.join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=6))
+    return f"https://ml.ofr.link/{sufixo}"
+
 async def buscar_ofertas_ml() -> List[Dict]:
-    """Busca ofertas no Mercado Livre."""
     resultados = []
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -83,12 +85,14 @@ async def buscar_ofertas_ml() -> List[Dict]:
                 if r.status_code != 200:
                     continue
                 for it in r.json().get("results", []):
-                    link = it["permalink"] + f"?utm_source={ML_NICK}"
+                    link = await encurtar_link(it["permalink"] + f"?utm_source={ML_NICK}")
+                    img = it.get("thumbnail", "").replace("I.jpg", "O.jpg")
                     resultados.append({
                         "fonte": "MERCADO LIVRE",
                         "titulo": it["title"],
                         "preco": f"R$ {it['price']:.2f}",
-                        "link": link
+                        "link": link,
+                        "imagem": img
                     })
         return resultados
     except Exception as e:
@@ -96,7 +100,6 @@ async def buscar_ofertas_ml() -> List[Dict]:
         return []
 
 async def buscar_ofertas_shopee() -> List[Dict]:
-    """Retorna ofertas da Shopee (se configurada)."""
     if not (SHOPEE_PARTNER_ID and SHOPEE_PARTNER_KEY and SHOPEE_SHOP_ID):
         return []
     try:
@@ -105,6 +108,7 @@ async def buscar_ofertas_shopee() -> List[Dict]:
         base = f"{SHOPEE_PARTNER_ID}{path}{ts}{SHOPEE_SHOP_ID}".encode()
         sign = hmac.new(SHOPEE_PARTNER_KEY.encode(), base, hashlib.sha256).hexdigest()
         url = f"https://partner.shopeemobile.com{path}?partner_id={SHOPEE_PARTNER_ID}&timestamp={ts}&sign={sign}&shop_id={SHOPEE_SHOP_ID}"
+
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.post(url, json={"page_size": 2, "page_no": 1})
             if r.status_code != 200:
@@ -112,11 +116,13 @@ async def buscar_ofertas_shopee() -> List[Dict]:
             data = r.json()
             out = []
             for item in (data.get("response") or {}).get("item_list", []):
+                img_url = item.get("images", [""])[0] if item.get("images") else ""
                 out.append({
                     "fonte": "SHOPEE",
                     "titulo": item.get("item_name", "Produto Shopee"),
                     "preco": "—",
-                    "link": f"https://shopee.com.br/product/{SHOPEE_SHOP_ID}/{item['item_id']}"
+                    "link": f"https://shopee.com.br/product/{SHOPEE_SHOP_ID}/{item['item_id']}",
+                    "imagem": f"https://down-bs.shopeesz.com.br/{img_url}" if img_url else ""
                 })
             return out
     except Exception as e:
@@ -124,7 +130,7 @@ async def buscar_ofertas_shopee() -> List[Dict]:
         return []
 
 async def postar_ofertas():
-    """Publica ofertas no Telegram."""
+    """Publica ofertas com imagem + visual melhorado."""
     try:
         ofertas = await buscar_ofertas_ml()
         ofertas += await buscar_ofertas_shopee()
@@ -138,16 +144,20 @@ async def postar_ofertas():
 
         for cid in destinos:
             for of in ofertas[:4]:
-                msg = (
-                    f"🛍️ <b>{of['fonte']}</b>\n"
-                    f"{of['titulo']}\n"
-                    f"💰 {of['preco']}\n"
-                    f"🔗 <a href='{of['link']}'>Compre aqui</a>"
+                legenda = (
+                    f"📦 <b>{of['fonte']}</b>\n\n"
+                    f"<b>🛒 {of['titulo']}</b>\n"
+                    f"💰 <b><i>{of['preco']}</i></b>\n\n"
+                    f"🔗 <a href='{of['link']}'>👉 Ver oferta agora</a>"
                 )
                 try:
-                    await app_tg.bot.send_message(cid, msg, parse_mode="HTML", disable_web_page_preview=False)
+                    if of.get("imagem"):
+                        await app_tg.bot.send_photo(cid, of["imagem"], caption=legenda, parse_mode="HTML")
+                    else:
+                        await app_tg.bot.send_message(cid, legenda, parse_mode="HTML", disable_web_page_preview=False)
                 except Exception as e:
                     logger.warning(f"Falha ao enviar: {e}")
+
         logger.info(f"✅ {len(ofertas)} ofertas postadas.")
     except Exception as e:
         logger.exception(e)
@@ -168,7 +178,6 @@ async def webhook():
         data = request.get_json(force=True)
         update = Update.de_json(data, app_tg.bot)
 
-        # 🔧 Corrige erro “Application not initialized”
         if not app_tg._initialized:
             logger.info("⚙️ Inicializando Application (lazy)...")
             await app_tg.initialize()

@@ -1,4 +1,4 @@
-import os, logging, asyncio, time, hmac, hashlib, json, random
+import os, logging, asyncio, time, hmac, hashlib, json, random, statistics
 from datetime import datetime
 from typing import List, Dict
 from dotenv import load_dotenv
@@ -7,13 +7,13 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import httpx
+import nest_asyncio
 
 load_dotenv()
+nest_asyncio.apply()  # evita o erro de loop fechado
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+# --- LOG ---
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # --- CONFIGURAÇÕES ---
@@ -21,6 +21,7 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 WEBHOOK_BASE = os.getenv("WEBHOOK_BASE", "").rstrip("/")
 PORT = int(os.getenv("PORT", 8080))
+POST_INTERVAL = int(os.getenv("POST_INTERVAL_SECONDS", "120"))
 
 # Mercado Livre
 ML_NICK = os.getenv("ML_NICK", "oficial")
@@ -30,8 +31,6 @@ ML_CATEGORIAS = ["MLB1648", "MLB263532", "MLB1132", "MLB1809"]
 SHOPEE_PARTNER_ID = os.getenv("SHOPEE_PARTNER_ID")
 SHOPEE_PARTNER_KEY = os.getenv("SHOPEE_PARTNER_KEY")
 SHOPEE_SHOP_ID = os.getenv("SHOPEE_SHOP_ID")
-
-POST_INTERVAL = int(os.getenv("POST_INTERVAL_SECONDS", "120"))
 
 if not TOKEN:
     raise RuntimeError("❌ Configure TELEGRAM_BOT_TOKEN no .env")
@@ -69,30 +68,40 @@ app_tg.add_handler(CommandHandler("start_posting", cmd_start_posting))
 app_tg.add_handler(CommandHandler("stop_posting", cmd_stop_posting))
 app_tg.add_handler(CommandHandler("status", cmd_status))
 
-# --- FUNÇÕES DE OFERTAS ---
+# --- FUNÇÕES ---
 async def encurtar_link(url: str) -> str:
-    """Gera link encurtado aleatório tipo ml.ofr.link/xxxxx."""
     sufixo = ''.join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=6))
     return f"https://ml.ofr.link/{sufixo}"
 
 async def buscar_ofertas_ml() -> List[Dict]:
+    """Busca produtos e identifica ofertas 20% abaixo da média."""
     resultados = []
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             for cat in ML_CATEGORIAS:
-                url = f"https://api.mercadolibre.com/sites/MLB/search?category={cat}&limit=3"
+                url = f"https://api.mercadolibre.com/sites/MLB/search?category={cat}&limit=10"
                 r = await client.get(url)
                 if r.status_code != 200:
                     continue
-                for it in r.json().get("results", []):
+
+                produtos = r.json().get("results", [])
+                precos = [p["price"] for p in produtos if p.get("price")]
+                if not precos:
+                    continue
+
+                media = statistics.mean(precos)
+                for it in produtos[:4]:
+                    preco = it["price"]
+                    barato = preco <= media * 0.8  # 20% abaixo da média
                     link = await encurtar_link(it["permalink"] + f"?utm_source={ML_NICK}")
                     img = it.get("thumbnail", "").replace("I.jpg", "O.jpg")
                     resultados.append({
                         "fonte": "MERCADO LIVRE",
                         "titulo": it["title"],
-                        "preco": f"R$ {it['price']:.2f}",
+                        "preco": f"R$ {preco:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
                         "link": link,
-                        "imagem": img
+                        "imagem": img,
+                        "oferta": barato
                     })
         return resultados
     except Exception as e:
@@ -110,7 +119,7 @@ async def buscar_ofertas_shopee() -> List[Dict]:
         url = f"https://partner.shopeemobile.com{path}?partner_id={SHOPEE_PARTNER_ID}&timestamp={ts}&sign={sign}&shop_id={SHOPEE_SHOP_ID}"
 
         async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.post(url, json={"page_size": 2, "page_no": 1})
+            r = await client.post(url, json={"page_size": 3, "page_no": 1})
             if r.status_code != 200:
                 return []
             data = r.json()
@@ -122,7 +131,8 @@ async def buscar_ofertas_shopee() -> List[Dict]:
                     "titulo": item.get("item_name", "Produto Shopee"),
                     "preco": "—",
                     "link": f"https://shopee.com.br/product/{SHOPEE_SHOP_ID}/{item['item_id']}",
-                    "imagem": f"https://down-bs.shopeesz.com.br/{img_url}" if img_url else ""
+                    "imagem": f"https://down-bs.shopeesz.com.br/{img_url}" if img_url else "",
+                    "oferta": False
                 })
             return out
     except Exception as e:
@@ -130,7 +140,7 @@ async def buscar_ofertas_shopee() -> List[Dict]:
         return []
 
 async def postar_ofertas():
-    """Publica ofertas com imagem + visual melhorado."""
+    """Posta ofertas com destaque visual."""
     try:
         ofertas = await buscar_ofertas_ml()
         ofertas += await buscar_ofertas_shopee()
@@ -144,9 +154,11 @@ async def postar_ofertas():
 
         for cid in destinos:
             for of in ofertas[:4]:
+                tag = "🔥 <b>OFERTA IMPERDÍVEL!</b>\n" if of.get("oferta") else ""
                 legenda = (
+                    f"{tag}"
                     f"📦 <b>{of['fonte']}</b>\n\n"
-                    f"<b>🛒 {of['titulo']}</b>\n"
+                    f"🛒 <b>{of['titulo']}</b>\n"
                     f"💰 <b><i>{of['preco']}</i></b>\n\n"
                     f"🔗 <a href='{of['link']}'>👉 Ver oferta agora</a>"
                 )
@@ -204,9 +216,7 @@ async def main():
     while True:
         await asyncio.sleep(3600)
 
-def start_bg():
-    asyncio.get_event_loop().create_task(main())
-
 if __name__ == "__main__":
-    start_bg()
-    flask_app.run(host="0.0.0.0", port=PORT)
+    loop = asyncio.get_event_loop()
+    loop.create_task(main())
+    flask_app.run(host="0.0.0.0", port=PORT, use_reloader=False)

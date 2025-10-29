@@ -2,7 +2,7 @@ import os
 import logging
 import asyncio
 import nest_asyncio
-from flask import Flask, request
+from quart import Quart, request  # ⬅️ Substitui Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 nest_asyncio.apply()
 
-# ✅ Garante que Flask e Telegram compartilhem o mesmo event loop
+# ✅ Um único event loop
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
@@ -35,64 +35,56 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --------------------------------------------------
-# 🚀 FLASK E TELEGRAM
+# 🚀 QUART (async Flask) + TELEGRAM
 # --------------------------------------------------
-app = Flask(__name__)
+app = Quart(__name__)
 app_tg = Application.builder().token(TOKEN).build()
 
 # --------------------------------------------------
-# 🧩 FUNÇÕES DE COMANDO
+# 🧩 COMANDOS DO BOT
 # --------------------------------------------------
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Olá! Estou pronto para postar suas ofertas!")
+    await update.message.reply_text("🤖 Bot de ofertas pronto para começar!")
 
 async def cmd_start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🚀 Postagem automática iniciada aqui!")
-    # Executa a rotina de postagens dentro do mesmo event loop
     asyncio.create_task(postar_oferta(context))
 
 # --------------------------------------------------
-# 🛍️ FUNÇÃO DE POSTAGEM AUTOMÁTICA
+# 🛍️ FUNÇÃO DE POSTAGEM
 # --------------------------------------------------
 async def postar_oferta(context: ContextTypes.DEFAULT_TYPE):
     logger.info("🛍️ Verificando novas ofertas...")
     try:
-        # 🔽 Aqui entra sua lógica real (ex: Mercado Livre / Shopee)
         ofertas = [
-            {"titulo": "SSD 1TB Kingston NV2", "link": "https://mercadolivre.com/exemplo"},
-            {"titulo": "Furadeira Bosch 220V", "link": "https://mercadolivre.com/exemplo2"}
+            {"titulo": "SSD Kingston 1TB NV2", "link": "https://mercadolivre.com/exemplo"},
+            {"titulo": "Furadeira Bosch 220V", "link": "https://mercadolivre.com/exemplo2"},
         ]
-
-        if not ofertas:
-            logger.warning("⚠️ Nenhuma oferta encontrada.")
-            return
-
-        for oferta in ofertas:
-            msg = f"🔥 *{oferta['titulo']}*\n🔗 {oferta['link']}"
+        for o in ofertas:
+            msg = f"🔥 *{o['titulo']}*\n🔗 {o['link']}"
             await context.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
-
         logger.info("✅ Ofertas enviadas com sucesso!")
-
     except Exception as e:
         logger.error(f"❌ Erro ao postar ofertas: {e}")
 
 # --------------------------------------------------
-# 🌐 ENDPOINT DE WEBHOOK
+# 🌐 WEBHOOK
 # --------------------------------------------------
-@app.route(f"/webhook/{TOKEN}", methods=["POST"])
+@app.post(f"/webhook/{TOKEN}")
 async def webhook():
     try:
-        update = Update.de_json(request.get_json(force=True), app_tg.bot)
+        data = await request.get_json()
+        update = Update.de_json(data, app_tg.bot)
         await app_tg.process_update(update)
     except Exception as e:
-        logger.error(f"❌ Erro ao processar update: {e}")
-    return "ok", 200
+        logger.error(f"❌ Erro no webhook: {e}")
+    return "ok"
 
 # --------------------------------------------------
-# 🔁 JOB SCHEDULER
+# ⏰ AGENDADOR
 # --------------------------------------------------
 scheduler = BackgroundScheduler()
-scheduler.add_job(lambda: logger.info("🛍️ Verificando novas ofertas..."), "interval", minutes=2)
+scheduler.add_job(lambda: logger.info("🕒 Checando ofertas..."), "interval", minutes=2)
 scheduler.start()
 
 # --------------------------------------------------
@@ -102,10 +94,9 @@ app_tg.add_handler(CommandHandler("start", cmd_start))
 app_tg.add_handler(CommandHandler("start_posting", cmd_start_posting))
 
 # --------------------------------------------------
-# 🚀 INICIALIZAÇÃO DO BOT
+# 🚀 INICIALIZAÇÃO
 # --------------------------------------------------
 async def init_bot():
-    logger.info("🌍 Configurando webhook atual...")
     await app_tg.bot.delete_webhook()
     webhook_url = f"{WEBHOOK_BASE}/webhook/{TOKEN}"
     await app_tg.bot.set_webhook(url=webhook_url)

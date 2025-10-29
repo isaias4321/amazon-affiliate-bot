@@ -1,4 +1,4 @@
-import os, logging, asyncio, time, hmac, hashlib, json, random, statistics
+import os, logging, asyncio, time, hmac, hashlib, json, random, statistics, threading
 from datetime import datetime
 from typing import List, Dict
 from dotenv import load_dotenv
@@ -9,14 +9,15 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import httpx
 import nest_asyncio
 
+# --- CONFIGURAÇÃO INICIAL ---
 load_dotenv()
-nest_asyncio.apply()  # evita o erro de loop fechado
+nest_asyncio.apply()  # evita erros de loop assíncrono duplicado
 
 # --- LOG ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# --- CONFIGURAÇÕES ---
+# --- VARIÁVEIS DE AMBIENTE ---
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 WEBHOOK_BASE = os.getenv("WEBHOOK_BASE", "").rstrip("/")
@@ -42,7 +43,7 @@ POSTING_ON = set()
 # --- COMANDOS ---
 async def cmd_start(update: Update, _: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 Bot de Ofertas!\n"
+        "🤖 Bot de Ofertas!\n\n"
         "/start_posting – começar a postar\n"
         "/stop_posting – parar\n"
         "/status – ver status"
@@ -68,13 +69,12 @@ app_tg.add_handler(CommandHandler("start_posting", cmd_start_posting))
 app_tg.add_handler(CommandHandler("stop_posting", cmd_stop_posting))
 app_tg.add_handler(CommandHandler("status", cmd_status))
 
-# --- FUNÇÕES ---
+# --- FUNÇÕES DE NEGÓCIO ---
 async def encurtar_link(url: str) -> str:
     sufixo = ''.join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=6))
     return f"https://ml.ofr.link/{sufixo}"
 
 async def buscar_ofertas_ml() -> List[Dict]:
-    """Busca produtos e identifica ofertas 20% abaixo da média."""
     resultados = []
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -92,7 +92,7 @@ async def buscar_ofertas_ml() -> List[Dict]:
                 media = statistics.mean(precos)
                 for it in produtos[:4]:
                     preco = it["price"]
-                    barato = preco <= media * 0.8  # 20% abaixo da média
+                    barato = preco <= media * 0.8
                     link = await encurtar_link(it["permalink"] + f"?utm_source={ML_NICK}")
                     img = it.get("thumbnail", "").replace("I.jpg", "O.jpg")
                     resultados.append({
@@ -140,7 +140,6 @@ async def buscar_ofertas_shopee() -> List[Dict]:
         return []
 
 async def postar_ofertas():
-    """Posta ofertas com destaque visual."""
     try:
         ofertas = await buscar_ofertas_ml()
         ofertas += await buscar_ofertas_shopee()
@@ -177,7 +176,7 @@ async def postar_ofertas():
 # --- SCHEDULER ---
 scheduler = AsyncIOScheduler()
 
-# --- FLASK / WEBHOOK ---
+# --- FLASK ---
 flask_app = Flask(__name__)
 
 @flask_app.get("/")
@@ -189,13 +188,6 @@ async def webhook():
     try:
         data = request.get_json(force=True)
         update = Update.de_json(data, app_tg.bot)
-
-        if not app_tg._initialized:
-            logger.info("⚙️ Inicializando Application (lazy)...")
-            await app_tg.initialize()
-        if not app_tg.running:
-            await app_tg.start()
-
         await app_tg.process_update(update)
         return jsonify({"ok": True}), 200
     except Exception as e:
@@ -207,16 +199,17 @@ async def setup_webhook():
     await app_tg.bot.set_webhook(url=f"{WEBHOOK_BASE}/webhook/{TOKEN}")
     logger.info("✅ Webhook configurado.")
 
-async def main():
+async def runner():
     await app_tg.initialize()
     await app_tg.start()
     await setup_webhook()
     scheduler.add_job(postar_ofertas, "interval", seconds=POST_INTERVAL, id="postar")
     scheduler.start()
-    while True:
-        await asyncio.sleep(3600)
+    logger.info("✅ Bot e Scheduler iniciados!")
+
+def start_bot():
+    asyncio.run(runner())
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.create_task(main())
+    threading.Thread(target=start_bot, daemon=True).start()
     flask_app.run(host="0.0.0.0", port=PORT, use_reloader=False)

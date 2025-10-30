@@ -17,12 +17,14 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 MERCADO_AFIL = os.getenv("MERCADO_AFIL")
 SHOPEE_AFIL = os.getenv("SHOPEE_AFIL")
 CHAT_ID = os.getenv("CHAT_ID")
+WEBHOOK_BASE = os.getenv("WEBHOOK_BASE", "")
+PORT = int(os.getenv("PORT", 8080))
 
 app_tg = Application.builder().token(TOKEN).build()
 scheduler = AsyncIOScheduler()
 
 
-# 🛒 Função para buscar ofertas do Mercado Livre
+# 🛒 Buscar ofertas do Mercado Livre
 async def buscar_ofertas_mercadolivre():
     url = "https://www.mercadolivre.com.br/ofertas"
     async with aiohttp.ClientSession() as session:
@@ -39,7 +41,7 @@ async def buscar_ofertas_mercadolivre():
             return ofertas
 
 
-# 🛍️ Função para buscar ofertas da Shopee
+# 🛍️ Buscar ofertas da Shopee
 async def buscar_ofertas_shopee():
     url = "https://shopee.com.br/flash_sale"
     async with aiohttp.ClientSession() as session:
@@ -57,20 +59,19 @@ async def buscar_ofertas_shopee():
             return ofertas
 
 
-# 🚀 Função que posta as ofertas
+# 🚀 Enviar ofertas
 async def postar_ofertas():
     try:
-        ml_ofertas = await buscar_ofertas_mercadolivre()
-        shopee_ofertas = await buscar_ofertas_shopee()
+        ml = await buscar_ofertas_mercadolivre()
+        sp = await buscar_ofertas_shopee()
 
-        if not ml_ofertas and not shopee_ofertas:
+        if not ml and not sp:
             logging.info("Nenhuma oferta encontrada no momento.")
             return
 
-        ofertas = ml_ofertas + shopee_ofertas
-        mensagens = "\n\n".join(ofertas[:6])
-
-        await app_tg.bot.send_message(chat_id=CHAT_ID, text=mensagens, parse_mode="Markdown")
+        todas = ml + sp
+        msg = "\n\n".join(todas[:6])
+        await app_tg.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
         logging.info("✅ Ofertas enviadas com sucesso!")
     except Exception as e:
         logging.error(f"Erro ao postar ofertas: {e}")
@@ -78,15 +79,15 @@ async def postar_ofertas():
 
 # ▶️ Comandos
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Olá! Eu vou te ajudar a divulgar ofertas automáticas do Mercado Livre e Shopee!")
+    await update.message.reply_text("🤖 Bot de ofertas automáticas ativo! Use /start_posting para iniciar.")
 
 async def start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     scheduler.add_job(postar_ofertas, "interval", minutes=2)
     scheduler.start()
-    await update.message.reply_text("🚀 Postagem automática iniciada! Verificando novas ofertas a cada 2 minutos.")
+    await update.message.reply_text("🚀 Postagem automática iniciada! A cada 2 minutos verificarei novas ofertas.")
 
 
-# Handlers
+# Registrar comandos
 app_tg.add_handler(CommandHandler("start", start))
 app_tg.add_handler(CommandHandler("start_posting", start_posting))
 
@@ -94,9 +95,19 @@ app_tg.add_handler(CommandHandler("start_posting", start_posting))
 # 🔗 Inicialização
 if __name__ == "__main__":
     logging.info("Bot iniciado 🚀")
-    app_tg.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.getenv("PORT", "8080")),
-        url_path=TOKEN,
-        webhook_url=f"https://{os.getenv('WEBHOOK_BASE')}/{TOKEN}"
-    )
+
+    # Detecta ambiente automaticamente
+    if "RAILWAY_ENVIRONMENT" in os.environ:
+        # Modo Webhook (Railway)
+        webhook_url = f"{WEBHOOK_BASE}/{TOKEN}"
+        logging.info(f"🌐 Iniciando em modo Webhook: {webhook_url}")
+        app_tg.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=TOKEN,
+            webhook_url=webhook_url
+        )
+    else:
+        # Modo local (Polling)
+        logging.info("🧩 Executando localmente com polling...")
+        app_tg.run_polling()

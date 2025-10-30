@@ -129,7 +129,7 @@ async def cmd_start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     scheduler = AsyncIOScheduler()
     scheduler.add_job(lambda: asyncio.run(postar_ofertas()), "interval", minutes=2)
     scheduler.start()
-    await update.message.reply_text("🚀 Postagem automática iniciada aqui!")
+    await update.message.reply_text("🚀 Postagem automática iniciada com sucesso!")
 
 # =====================================
 # 🏁 Inicialização do Bot
@@ -139,6 +139,6 @@ if __name__ == "__main__":
 
     app_tg = Application.builder().token(TOKEN).build()
     app_tg.add_handler(CommandHandler("start", start))
-    app_tg.add_handler(CommandHandler("postar", cmd_start_posting))
+    app_tg.add_handler(CommandHandler("start_posting", cmd_start_posting))  # ✅ Atualizado
 
     app_tg.run_polling()

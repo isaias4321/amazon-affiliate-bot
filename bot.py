@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+from aiohttp import web
 
 # ======================================================
 # 🔧 CONFIGURAÇÕES INICIAIS
@@ -34,10 +35,13 @@ if not TOKEN:
     raise ValueError("❌ TELEGRAM_TOKEN não definido no .env")
 
 # ======================================================
-# 🛍️ FUNÇÕES DE BUSCA DE OFERTAS
+# 🛍️ NICHOS
 # ======================================================
-
 NICHOS = ["eletrônicos", "informatica", "computador", "ferramentas", "eletrodomésticos"]
+
+# ======================================================
+# 🛒 FUNÇÕES DE BUSCA DE OFERTAS
+# ======================================================
 
 def montar_link_meli_afiliado(permalink: str) -> str:
     sep = "&" if "?" in permalink else "?"
@@ -45,47 +49,47 @@ def montar_link_meli_afiliado(permalink: str) -> str:
     return f"{permalink}{sep}{q}"
 
 async def buscar_ofertas_mercadolivre_api(min_desconto=20, limite=6):
+    """Busca produtos reais do Mercado Livre com desconto."""
     base = "https://api.mercadolibre.com/sites/MLB/search"
     ofertas = []
     async with aiohttp.ClientSession() as session:
         for termo in NICHOS:
-            params = {"q": termo, "limit": 20, "sort": "relevance"}
+            params = {"q": termo, "limit": 30, "sort": "price_asc"}
             async with session.get(base, params=params) as resp:
                 if resp.status != 200:
                     continue
                 data = await resp.json()
 
             for it in data.get("results", []):
-                title = it.get("title")
-                price = it.get("price")
+                title = it.get("title", "")
+                price = it.get("price", 0)
                 orig = it.get("original_price")
                 permalink = it.get("permalink")
 
-                desconto = 0
-                if orig and orig > 0 and price:
-                    desconto = round((1 - (price / orig)) * 100)
+                # Ignorar produtos sem desconto real
+                if not orig or orig <= price:
+                    continue
 
-                if desconto >= min_desconto or any(
-                    k in (title or "").lower()
-                    for k in ["ssd", "notebook", "furadeira", "smart", "placa", "processador"]
-                ):
-                    link_af = montar_link_meli_afiliado(permalink)
-                    tag_desc = f"🔻 {desconto}% OFF" if desconto > 0 else "💥 Oferta"
-                    msg = [
-                        f"🛒 *{title}*",
-                        f"💸 R$ {price:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
-                    ]
-                    if desconto > 0 and orig:
-                        msg.append(f"~R$ {orig:,.2f}~".replace(",", "X").replace(".", ",").replace("X", "."))
-                    msg.append(tag_desc)
-                    msg.append(f"🔗 {link_af}")
-                    ofertas.append("\n".join(msg))
+                desconto = round((1 - price / orig) * 100)
+                if desconto < min_desconto:
+                    continue
+
+                link_af = montar_link_meli_afiliado(permalink)
+                msg = [
+                    f"🛒 *{title}*",
+                    f"💸 De ~R$ {orig:,.2f}~ por *R$ {price:,.2f}*"
+                    .replace(",", "X").replace(".", ",").replace("X", "."),
+                    f"🔻 {desconto}% OFF",
+                    f"🔗 {link_af}",
+                ]
+                ofertas.append("\n".join(msg))
 
                 if len(ofertas) >= limite:
                     return ofertas
     return ofertas
 
 async def buscar_ofertas_shopee_fallback(limite=2):
+    """Fallback para Shopee apenas se não houver ofertas do ML."""
     if not SHOPEE_AFIL:
         return []
     textos = [
@@ -112,19 +116,22 @@ async def cmd_start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     scheduler.add_job(job_postar, "interval", minutes=2)
     scheduler.start()
-
     logging.info("⏰ Scheduler iniciado com sucesso!")
 
 async def postar_ofertas():
     try:
         ml = await buscar_ofertas_mercadolivre_api(min_desconto=20, limite=6)
-        sp = await buscar_ofertas_shopee_fallback(limite=2)
 
-        if not ml and not sp:
+        if ml:
+            todas = ml
+        else:
+            logging.info("Nenhuma oferta do Mercado Livre, usando fallback Shopee.")
+            todas = await buscar_ofertas_shopee_fallback(limite=2)
+
+        if not todas:
             logging.info("Nenhuma oferta encontrada no momento.")
             return
 
-        todas = ml + sp
         msg = "\n\n".join(todas[:8])
         await app_tg.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
         logging.info("✅ Ofertas enviadas com sucesso!")
@@ -140,10 +147,8 @@ app_tg.add_handler(CommandHandler("start", cmd_start))
 app_tg.add_handler(CommandHandler("start_posting", cmd_start_posting))
 
 # ======================================================
-# 🌐 HEALTH CHECK (Railway)
+# 🌐 HEALTH CHECK PARA RAILWAY
 # ======================================================
-
-from aiohttp import web
 
 async def healthz(request):
     return web.Response(text="ok", status=200)
@@ -158,7 +163,7 @@ async def iniciar_health_server():
     logging.info("💓 Health check ativo em /healthz")
 
 # ======================================================
-# 🌐 EXECUÇÃO LOCAL OU VIA RAILWAY
+# 🌍 EXECUÇÃO LOCAL OU VIA RAILWAY
 # ======================================================
 
 async def main():

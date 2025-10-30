@@ -1,186 +1,144 @@
 import os
+import random
 import logging
 import asyncio
-import nest_asyncio
 import aiohttp
-from urllib.parse import urlencode
-from dotenv import load_dotenv
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from aiohttp import web
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# ======================================================
-# 🔧 CONFIGURAÇÕES INICIAIS
-# ======================================================
-
-load_dotenv()
-nest_asyncio.apply()
-
+# =====================================
+# 🔧 CONFIGURAÇÃO INICIAL
+# =====================================
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
-print("🚀 Iniciando bot...", flush=True)
+logger = logging.getLogger(__name__)
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-WEBHOOK_BASE = os.getenv("WEBHOOK_BASE")
 
-MELI_MATT_TOOL = os.getenv("MELI_MATT_TOOL", "")
-MELI_MATT_WORD = os.getenv("MELI_MATT_WORD", "")
-SHOPEE_AFIL = os.getenv("SHOPEE_AFIL", "")
+# Mercado Livre
+MELI_MATT_TOOL = os.getenv("MELI_MATT_TOOL")
+MELI_MATT_WORD = os.getenv("MELI_MATT_WORD")
 
-if not TOKEN:
-    raise ValueError("❌ TELEGRAM_TOKEN não definido no .env")
+# Shopee API
+SHOPEE_APP_ID = os.getenv("SHOPEE_APP_ID")
+SHOPEE_APP_SECRET = os.getenv("SHOPEE_APP_SECRET")
 
-# ======================================================
-# 🛍️ NICHOS
-# ======================================================
-NICHOS = ["eletrônicos", "informatica", "computador", "ferramentas", "eletrodomésticos"]
+# Categorias principais
+CATEGORIAS = [
+    "eletrônicos",
+    "peças de computador",
+    "eletrodomésticos",
+    "ferramentas"
+]
 
-# ======================================================
-# 🛒 FUNÇÕES DE BUSCA DE OFERTAS
-# ======================================================
+# =====================================
+# ⚙️ Funções auxiliares
+# =====================================
+async def buscar_ofertas_mercadolivre():
+    """Busca ofertas reais do Mercado Livre via API pública."""
+    url = "https://api.mercadolibre.com/sites/MLB/search"
+    params = {"q": random.choice(CATEGORIAS), "limit": 3}
 
-def montar_link_meli_afiliado(permalink: str) -> str:
-    sep = "&" if "?" in permalink else "?"
-    q = urlencode({"matt_tool": MELI_MATT_TOOL, "matt_word": MELI_MATT_WORD})
-    return f"{permalink}{sep}{q}"
-
-async def buscar_ofertas_mercadolivre_api(min_desconto=20, limite=6):
-    """Busca produtos reais do Mercado Livre com desconto."""
-    base = "https://api.mercadolibre.com/sites/MLB/search"
-    ofertas = []
     async with aiohttp.ClientSession() as session:
-        for termo in NICHOS:
-            params = {"q": termo, "limit": 30, "sort": "price_asc"}
-            async with session.get(base, params=params) as resp:
-                if resp.status != 200:
-                    continue
+        async with session.get(url, params=params) as resp:
+            data = await resp.json()
+            results = data.get("results", [])
+            ofertas = []
+            for r in results:
+                link_af = (
+                    f"{r['permalink']}?matt_tool={MELI_MATT_TOOL}&matt_word={MELI_MATT_WORD}"
+                )
+                ofertas.append({
+                    "titulo": r["title"],
+                    "preco": r["price"],
+                    "link": link_af
+                })
+            return ofertas
+
+async def buscar_ofertas_shopee():
+    """Busca produtos da Shopee via API oficial."""
+    termo = random.choice(CATEGORIAS)
+    ts = int(datetime.utcnow().timestamp())
+    url = f"https://open-api.affiliate.shopee.com.br/api/v1/product_offer_list"
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {SHOPEE_APP_SECRET}",
+        "X-Appid": SHOPEE_APP_ID
+    }
+    payload = {
+        "page_size": 3,
+        "page": 1,
+        "keyword": termo,
+        "sign_fields": "",
+        "timestamp": ts
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=headers) as resp:
                 data = await resp.json()
-
-            for it in data.get("results", []):
-                title = it.get("title", "")
-                price = it.get("price", 0)
-                orig = it.get("original_price")
-                permalink = it.get("permalink")
-
-                # Ignorar produtos sem desconto real
-                if not orig or orig <= price:
-                    continue
-
-                desconto = round((1 - price / orig) * 100)
-                if desconto < min_desconto:
-                    continue
-
-                link_af = montar_link_meli_afiliado(permalink)
-                msg = [
-                    f"🛒 *{title}*",
-                    f"💸 De ~R$ {orig:,.2f}~ por *R$ {price:,.2f}*"
-                    .replace(",", "X").replace(".", ",").replace("X", "."),
-                    f"🔻 {desconto}% OFF",
-                    f"🔗 {link_af}",
-                ]
-                ofertas.append("\n".join(msg))
-
-                if len(ofertas) >= limite:
-                    return ofertas
-    return ofertas
-
-async def buscar_ofertas_shopee_fallback(limite=2):
-    """Fallback para Shopee apenas se não houver ofertas do ML."""
-    if not SHOPEE_AFIL:
+                items = data.get("data", {}).get("list", [])
+                ofertas = []
+                for item in items:
+                    ofertas.append({
+                        "titulo": item.get("name"),
+                        "preco": item.get("price"),
+                        "link": item.get("short_url") or item.get("offer_link")
+                    })
+                return ofertas
+    except Exception as e:
+        logger.error(f"Erro ao buscar ofertas Shopee: {e}")
         return []
-    textos = [
-        "🔥 Ofertas relâmpago Shopee — confira agora!",
-        "🧡 Achados Shopee com cupom & frete — veja os destaques!",
-        "⚡ Shopee Flash: preços caindo — corra!",
-    ]
-    return [f"{t}\n🔗 {SHOPEE_AFIL}" for t in textos[:limite]]
-
-# ======================================================
-# 🤖 FUNÇÕES DO TELEGRAM
-# ======================================================
-
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Olá! Use /start_posting para ativar as postagens automáticas.")
-
-async def cmd_start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 Postagem automática iniciada aqui!")
-
-    scheduler = AsyncIOScheduler(timezone="UTC")
-
-    async def job_postar():
-        await postar_ofertas()
-
-    scheduler.add_job(job_postar, "interval", minutes=2)
-    scheduler.start()
-    logging.info("⏰ Scheduler iniciado com sucesso!")
 
 async def postar_ofertas():
-    try:
-        ml = await buscar_ofertas_mercadolivre_api(min_desconto=20, limite=6)
+    """Envia as ofertas encontradas para o grupo."""
+    logger.info("🛍️ Verificando novas ofertas...")
 
-        if ml:
-            todas = ml
-        else:
-            logging.info("Nenhuma oferta do Mercado Livre, usando fallback Shopee.")
-            todas = await buscar_ofertas_shopee_fallback(limite=2)
+    ofertas_meli = await buscar_ofertas_mercadolivre()
+    ofertas_shopee = await buscar_ofertas_shopee()
 
-        if not todas:
-            logging.info("Nenhuma oferta encontrada no momento.")
-            return
+    ofertas = (ofertas_meli or []) + (ofertas_shopee or [])
+    if not ofertas:
+        logger.info("Nenhuma oferta encontrada no momento.")
+        return
 
-        msg = "\n\n".join(todas[:8])
-        await app_tg.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
-        logging.info("✅ Ofertas enviadas com sucesso!")
-    except Exception as e:
-        logging.exception(f"Erro ao postar ofertas: {e}")
+    app = Application.builder().token(TOKEN).build()
 
-# ======================================================
-# 🚀 INICIALIZAÇÃO DO BOT
-# ======================================================
+    for o in ofertas:
+        msg = f"📦 *{o['titulo']}*\n💰 R$ {o['preco']}\n🔗 {o['link']}"
+        try:
+            await app.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Erro ao enviar mensagem: {e}")
 
-app_tg = Application.builder().token(TOKEN).build()
-app_tg.add_handler(CommandHandler("start", cmd_start))
-app_tg.add_handler(CommandHandler("start_posting", cmd_start_posting))
+    logger.info("✅ Ofertas enviadas com sucesso!")
 
-# ======================================================
-# 🌐 HEALTH CHECK PARA RAILWAY
-# ======================================================
+# =====================================
+# 🤖 Comandos do bot
+# =====================================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🤖 Bot de Ofertas ativo e pronto!")
 
-async def healthz(request):
-    return web.Response(text="ok", status=200)
+async def cmd_start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(lambda: asyncio.run(postar_ofertas()), "interval", minutes=2)
+    scheduler.start()
+    await update.message.reply_text("🚀 Postagem automática iniciada aqui!")
 
-async def iniciar_health_server():
-    app = web.Application()
-    app.add_routes([web.get("/healthz", healthz)])
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 8081)
-    await site.start()
-    logging.info("💓 Health check ativo em /healthz")
-
-# ======================================================
-# 🌍 EXECUÇÃO LOCAL OU VIA RAILWAY
-# ======================================================
-
-async def main():
-    asyncio.create_task(iniciar_health_server())
-
-    if WEBHOOK_BASE:
-        url = f"{WEBHOOK_BASE}/webhook/{TOKEN}"
-        print(f"🌍 Iniciando em modo Webhook: {url}", flush=True)
-        await app_tg.run_webhook(
-            listen="0.0.0.0",
-            port=int(os.environ.get("PORT", "8080")),
-            url_path=f"webhook/{TOKEN}",
-            webhook_url=url,
-        )
-    else:
-        print("💻 Executando localmente com polling...", flush=True)
-        await app_tg.run_polling()
-
+# =====================================
+# 🏁 Inicialização do Bot
+# =====================================
 if __name__ == "__main__":
-    asyncio.run(main())
+    logger.info("Bot iniciado 🚀")
+
+    app_tg = Application.builder().token(TOKEN).build()
+    app_tg.add_handler(CommandHandler("start", start))
+    app_tg.add_handler(CommandHandler("postar", cmd_start_posting))
+
+    app_tg.run_polling()

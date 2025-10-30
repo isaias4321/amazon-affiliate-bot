@@ -104,9 +104,16 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🚀 Postagem automática iniciada aqui!")
+
     scheduler = AsyncIOScheduler(timezone="UTC")
-    scheduler.add_job(lambda: asyncio.create_task(postar_ofertas()), "interval", minutes=2)
+
+    async def job_postar():
+        await postar_ofertas()
+
+    scheduler.add_job(job_postar, "interval", minutes=2)
     scheduler.start()
+
+    logging.info("⏰ Scheduler iniciado com sucesso!")
 
 async def postar_ofertas():
     try:
@@ -133,18 +140,42 @@ app_tg.add_handler(CommandHandler("start", cmd_start))
 app_tg.add_handler(CommandHandler("start_posting", cmd_start_posting))
 
 # ======================================================
+# 🌐 HEALTH CHECK (Railway)
+# ======================================================
+
+from aiohttp import web
+
+async def healthz(request):
+    return web.Response(text="ok", status=200)
+
+async def iniciar_health_server():
+    app = web.Application()
+    app.add_routes([web.get("/healthz", healthz)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 8081)
+    await site.start()
+    logging.info("💓 Health check ativo em /healthz")
+
+# ======================================================
 # 🌐 EXECUÇÃO LOCAL OU VIA RAILWAY
 # ======================================================
 
-if WEBHOOK_BASE:
-    url = f"{WEBHOOK_BASE}/webhook/{TOKEN}"
-    print(f"🌍 Iniciando em modo Webhook: {url}", flush=True)
-    app_tg.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.environ.get("PORT", "8080")),
-        url_path=f"webhook/{TOKEN}",
-        webhook_url=url,
-    )
-else:
-    print("💻 Executando localmente com polling...", flush=True)
-    app_tg.run_polling()
+async def main():
+    asyncio.create_task(iniciar_health_server())
+
+    if WEBHOOK_BASE:
+        url = f"{WEBHOOK_BASE}/webhook/{TOKEN}"
+        print(f"🌍 Iniciando em modo Webhook: {url}", flush=True)
+        await app_tg.run_webhook(
+            listen="0.0.0.0",
+            port=int(os.environ.get("PORT", "8080")),
+            url_path=f"webhook/{TOKEN}",
+            webhook_url=url,
+        )
+    else:
+        print("💻 Executando localmente com polling...", flush=True)
+        await app_tg.run_polling()
+
+if __name__ == "__main__":
+    asyncio.run(main())

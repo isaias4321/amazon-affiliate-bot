@@ -3,7 +3,7 @@ import random
 import logging
 import asyncio
 import aiohttp
-from datetime import datetime
+from datetime import datetime, timezone
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -24,26 +24,25 @@ CHAT_ID = os.getenv("CHAT_ID")
 MELI_MATT_TOOL = os.getenv("MELI_MATT_TOOL")
 MELI_MATT_WORD = os.getenv("MELI_MATT_WORD")
 
-# Shopee API
+# Shopee
 SHOPEE_APP_ID = os.getenv("SHOPEE_APP_ID")
 SHOPEE_APP_SECRET = os.getenv("SHOPEE_APP_SECRET")
 
-# Categorias principais
+# Categorias de interesse
 CATEGORIAS = [
     "eletrônicos",
     "peças de computador",
     "eletrodomésticos",
-    "ferramentas"
+    "ferramentas",
 ]
 
-# Evitar produtos repetidos
 ULTIMOS_PRODUTOS = set()
 
 # =====================================
-# ⚙️ Funções auxiliares
+# ⚙️ FUNÇÕES AUXILIARES
 # =====================================
 async def buscar_ofertas_mercadolivre():
-    """Busca ofertas reais do Mercado Livre via API pública."""
+    """Busca ofertas no Mercado Livre."""
     url = "https://api.mercadolibre.com/sites/MLB/search"
     params = {"q": random.choice(CATEGORIAS), "limit": 3}
 
@@ -65,27 +64,26 @@ async def buscar_ofertas_mercadolivre():
 
 
 async def buscar_ofertas_shopee():
-    """Busca produtos da Shopee via API oficial."""
-    # 🔒 Verificação de credenciais
+    """Busca ofertas reais da Shopee."""
     if not SHOPEE_APP_ID or not SHOPEE_APP_SECRET:
         logger.error("❌ Credenciais Shopee não configuradas! Verifique SHOPEE_APP_ID e SHOPEE_APP_SECRET.")
         return []
 
     termo = random.choice(CATEGORIAS)
-    ts = int(datetime.utcnow().timestamp())
-    url = "https://open-api.affiliate.shopee.com.br/api/v1/product_offer_list"
+    ts = int(datetime.now(timezone.utc).timestamp())
+    url = "https://open-api.affiliate.shopee.com.br/api/v1/offer/product_offer"
 
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {SHOPEE_APP_SECRET}",
-        "X-Appid": str(SHOPEE_APP_ID)
+        "X-Appid": str(SHOPEE_APP_ID),
     }
 
     payload = {
         "page_size": 3,
         "page": 1,
-        "keyword": termo or "",
-        "timestamp": ts
+        "keyword": termo,
+        "timestamp": ts,
     }
 
     try:
@@ -97,9 +95,8 @@ async def buscar_ofertas_shopee():
                 for item in items:
                     titulo = item.get("name")
                     if not titulo or titulo in ULTIMOS_PRODUTOS:
-                        continue  # evita repetição
+                        continue
                     ULTIMOS_PRODUTOS.add(titulo)
-
                     ofertas.append({
                         "titulo": titulo,
                         "preco": item.get("price"),
@@ -136,7 +133,7 @@ async def postar_ofertas():
 
 
 # =====================================
-# 🤖 Comandos do bot
+# 🤖 COMANDOS DO BOT
 # =====================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🤖 Bot de Ofertas ativo e pronto!")
@@ -150,7 +147,7 @@ async def cmd_start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =====================================
-# 🏁 Inicialização do Bot
+# 🏁 INICIALIZAÇÃO DO BOT
 # =====================================
 if __name__ == "__main__":
     logger.info("Bot iniciado 🚀")

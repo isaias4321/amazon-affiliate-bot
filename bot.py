@@ -120,8 +120,6 @@ async def postar_ofertas():
         logger.info("Nenhuma oferta encontrada no momento.")
         return
 
-    app = Application.builder().token(TOKEN).build()
-
     for o in ofertas:
         msg = f"📦 *{o['titulo']}*\n💰 R$ {o['preco']}\n🔗 {o['link']}"
         try:
@@ -141,27 +139,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(lambda: asyncio.run(postar_ofertas()), "interval", minutes=2)
+    scheduler.add_job(lambda: asyncio.create_task(postar_ofertas()), "interval", minutes=2)
     scheduler.start()
     await update.message.reply_text("🚀 Postagem automática iniciada com sucesso!")
 
 
 # =====================================
-# 🏁 INICIALIZAÇÃO DO BOT (CORRIGIDO PARA PYTHON 3.12)
+# 🏁 INICIALIZAÇÃO DO BOT (SEM asyncio.run)
 # =====================================
-if __name__ == "__main__":
-    logger.info("Bot iniciado 🚀")
+logger.info("Bot iniciado 🚀")
 
-    async def main():
-        app_tg = Application.builder().token(TOKEN).build()
-        app_tg.add_handler(CommandHandler("start", start))
-        app_tg.add_handler(CommandHandler("start_posting", cmd_start_posting))
+app = Application.builder().token(TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("start_posting", cmd_start_posting))
 
-        # 🧹 Limpa qualquer webhook antigo (para evitar erro 409)
-        bot = app_tg.bot
-        await bot.delete_webhook(drop_pending_updates=True)
+# Remove webhooks antigos e inicia o polling
+async def inicializar():
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    await app.initialize()
+    await app.start()
+    logger.info("✅ Bot conectado e em execução.")
+    await app.updater.start_polling()
+    await app.updater.idle()
 
-        # 🚀 Inicia o bot em modo polling
-        await app_tg.run_polling()
-
-    asyncio.run(main())
+asyncio.get_event_loop().create_task(inicializar())
+asyncio.get_event_loop().run_forever()

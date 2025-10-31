@@ -66,6 +66,11 @@ async def buscar_ofertas_mercadolivre():
 
 async def buscar_ofertas_shopee():
     """Busca produtos da Shopee via API oficial."""
+    # 🔒 Verificação de credenciais
+    if not SHOPEE_APP_ID or not SHOPEE_APP_SECRET:
+        logger.error("❌ Credenciais Shopee não configuradas! Verifique SHOPEE_APP_ID e SHOPEE_APP_SECRET.")
+        return []
+
     termo = random.choice(CATEGORIAS)
     ts = int(datetime.utcnow().timestamp())
     url = "https://open-api.affiliate.shopee.com.br/api/v1/product_offer_list"
@@ -73,7 +78,7 @@ async def buscar_ofertas_shopee():
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {SHOPEE_APP_SECRET}",
-        "X-Appid": SHOPEE_APP_ID
+        "X-Appid": str(SHOPEE_APP_ID)
     }
 
     payload = {
@@ -91,7 +96,7 @@ async def buscar_ofertas_shopee():
                 ofertas = []
                 for item in items:
                     titulo = item.get("name")
-                    if titulo in ULTIMOS_PRODUTOS:
+                    if not titulo or titulo in ULTIMOS_PRODUTOS:
                         continue  # evita repetição
                     ULTIMOS_PRODUTOS.add(titulo)
 

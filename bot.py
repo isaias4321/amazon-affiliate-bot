@@ -64,7 +64,7 @@ async def buscar_ofertas_mercadolivre():
 
 
 async def buscar_ofertas_shopee():
-    """Busca ofertas reais da Shopee."""
+    """Busca ofertas reais da Shopee via API oficial de afiliados."""
     if not SHOPEE_APP_ID or not SHOPEE_APP_SECRET:
         logger.error("❌ Credenciais Shopee não configuradas! Verifique SHOPEE_APP_ID e SHOPEE_APP_SECRET.")
         return []
@@ -156,4 +156,9 @@ if __name__ == "__main__":
     app_tg.add_handler(CommandHandler("start", start))
     app_tg.add_handler(CommandHandler("start_posting", cmd_start_posting))
 
+    # 🧹 Limpa qualquer webhook antigo (para evitar erro 409)
+    import telegram
+    asyncio.run(telegram.Bot(TOKEN).delete_webhook(drop_pending_updates=True))
+
+    # 🚀 Inicia o bot em modo polling
     app_tg.run_polling()

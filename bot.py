@@ -147,18 +147,21 @@ async def cmd_start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =====================================
-# 🏁 INICIALIZAÇÃO DO BOT
+# 🏁 INICIALIZAÇÃO DO BOT (CORRIGIDO PARA PYTHON 3.12)
 # =====================================
 if __name__ == "__main__":
     logger.info("Bot iniciado 🚀")
 
-    app_tg = Application.builder().token(TOKEN).build()
-    app_tg.add_handler(CommandHandler("start", start))
-    app_tg.add_handler(CommandHandler("start_posting", cmd_start_posting))
+    async def main():
+        app_tg = Application.builder().token(TOKEN).build()
+        app_tg.add_handler(CommandHandler("start", start))
+        app_tg.add_handler(CommandHandler("start_posting", cmd_start_posting))
 
-    # 🧹 Limpa qualquer webhook antigo (para evitar erro 409)
-    import telegram
-    asyncio.run(telegram.Bot(TOKEN).delete_webhook(drop_pending_updates=True))
+        # 🧹 Limpa qualquer webhook antigo (para evitar erro 409)
+        bot = app_tg.bot
+        await bot.delete_webhook(drop_pending_updates=True)
 
-    # 🚀 Inicia o bot em modo polling
-    app_tg.run_polling()
+        # 🚀 Inicia o bot em modo polling
+        await app_tg.run_polling()
+
+    asyncio.run(main())

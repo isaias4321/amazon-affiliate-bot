@@ -7,6 +7,10 @@ from datetime import datetime, timezone
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from colorama import Fore, Style, init
+
+# Inicializa cores no terminal
+init(autoreset=True)
 
 # =====================================
 # 🔧 CONFIGURAÇÃO INICIAL
@@ -28,7 +32,7 @@ MELI_MATT_WORD = os.getenv("MELI_MATT_WORD")
 SHOPEE_APP_ID = os.getenv("SHOPEE_APP_ID")
 SHOPEE_APP_SECRET = os.getenv("SHOPEE_APP_SECRET")
 
-# Categorias de interesse
+# Categorias desejadas
 CATEGORIAS = [
     "eletrônicos",
     "peças de computador",
@@ -42,7 +46,7 @@ ULTIMOS_PRODUTOS = set()
 # ⚙️ FUNÇÕES AUXILIARES
 # =====================================
 async def buscar_ofertas_mercadolivre():
-    """Busca ofertas no Mercado Livre."""
+    """Busca produtos do Mercado Livre."""
     url = "https://api.mercadolibre.com/sites/MLB/search"
     params = {"q": random.choice(CATEGORIAS), "limit": 3}
 
@@ -64,9 +68,9 @@ async def buscar_ofertas_mercadolivre():
 
 
 async def buscar_ofertas_shopee():
-    """Busca ofertas reais da Shopee via API oficial de afiliados."""
+    """Busca ofertas da Shopee via API oficial."""
     if not SHOPEE_APP_ID or not SHOPEE_APP_SECRET:
-        logger.error("❌ Credenciais Shopee não configuradas! Verifique SHOPEE_APP_ID e SHOPEE_APP_SECRET.")
+        logger.error(Fore.RED + "❌ Credenciais Shopee não configuradas!")
         return []
 
     termo = random.choice(CATEGORIAS)
@@ -104,20 +108,20 @@ async def buscar_ofertas_shopee():
                     })
                 return ofertas
     except Exception as e:
-        logger.error(f"Erro ao buscar ofertas Shopee: {e}")
+        logger.error(Fore.RED + f"Erro ao buscar ofertas Shopee: {e}")
         return []
 
 
 async def postar_ofertas(app):
-    """Envia as ofertas encontradas para o grupo."""
-    logger.info("🛍️ Verificando novas ofertas...")
+    """Publica ofertas no grupo do Telegram."""
+    logger.info(Fore.BLUE + "🛍️ Verificando novas ofertas...")
 
     ofertas_meli = await buscar_ofertas_mercadolivre()
     ofertas_shopee = await buscar_ofertas_shopee()
 
     ofertas = (ofertas_meli or []) + (ofertas_shopee or [])
     if not ofertas:
-        logger.info("Nenhuma oferta encontrada no momento.")
+        logger.info(Fore.YELLOW + "⚠️ Nenhuma oferta encontrada no momento.")
         return
 
     for o in ofertas:
@@ -125,47 +129,41 @@ async def postar_ofertas(app):
         try:
             await app.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
         except Exception as e:
-            logger.error(f"Erro ao enviar mensagem: {e}")
+            logger.error(Fore.RED + f"Erro ao enviar mensagem: {e}")
 
-    logger.info("✅ Ofertas enviadas com sucesso!")
+    logger.info(Fore.GREEN + "✅ Ofertas enviadas com sucesso!")
 
 
 # =====================================
 # 🤖 COMANDOS DO BOT
 # =====================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Bot de Ofertas ativo e pronto!")
+    await update.message.reply_text("🤖 Bot de Ofertas ativo e pronto para encontrar promoções!")
 
 
 async def cmd_start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     scheduler = AsyncIOScheduler()
     scheduler.add_job(lambda: asyncio.create_task(postar_ofertas(context.application)), "interval", minutes=2)
     scheduler.start()
-    await update.message.reply_text("🚀 Postagem automática iniciada com sucesso!")
+    await update.message.reply_text("🚀 Postagem automática iniciada!")
 
 
 # =====================================
 # 🏁 INICIALIZAÇÃO DO BOT (VERSÃO FINAL)
 # =====================================
-logger.info("Bot iniciado 🚀")
+logger.info(Fore.CYAN + "🚀 Iniciando bot de ofertas...")
 
-async def inicializar():
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("start_posting", cmd_start_posting))
-
-    # Remove webhook antigo (evita conflito)
-    await app.bot.delete_webhook(drop_pending_updates=True)
-
-    # Executa o bot em modo polling
-    logger.info("✅ Bot conectado e em execução.")
-    await app.run_polling()
+app = Application.builder().token(TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("start_posting", cmd_start_posting))
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(inicializar())
-    except RuntimeError:
-        # Corrige o loop no Python 3.12+
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(inicializar())
+    import nest_asyncio
+    nest_asyncio.apply()
+
+    async def main():
+        await app.bot.delete_webhook(drop_pending_updates=True)
+        logger.info(Fore.GREEN + "✅ Bot conectado e em execução.")
+        await app.run_polling()
+
+    asyncio.run(main())

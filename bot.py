@@ -108,7 +108,7 @@ async def buscar_ofertas_shopee():
         return []
 
 
-async def postar_ofertas():
+async def postar_ofertas(app):
     """Envia as ofertas encontradas para o grupo."""
     logger.info("🛍️ Verificando novas ofertas...")
 
@@ -139,28 +139,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(lambda: asyncio.create_task(postar_ofertas()), "interval", minutes=2)
+    scheduler.add_job(lambda: asyncio.create_task(postar_ofertas(context.application)), "interval", minutes=2)
     scheduler.start()
     await update.message.reply_text("🚀 Postagem automática iniciada com sucesso!")
 
 
 # =====================================
-# 🏁 INICIALIZAÇÃO DO BOT (SEM asyncio.run)
+# 🏁 INICIALIZAÇÃO DO BOT (VERSÃO FINAL)
 # =====================================
 logger.info("Bot iniciado 🚀")
 
-app = Application.builder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("start_posting", cmd_start_posting))
-
-# Remove webhooks antigos e inicia o polling
 async def inicializar():
-    await app.bot.delete_webhook(drop_pending_updates=True)
-    await app.initialize()
-    await app.start()
-    logger.info("✅ Bot conectado e em execução.")
-    await app.updater.start_polling()
-    await app.updater.idle()
+    app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("start_posting", cmd_start_posting))
 
-asyncio.get_event_loop().create_task(inicializar())
-asyncio.get_event_loop().run_forever()
+    # Remove webhook antigo (evita conflito)
+    await app.bot.delete_webhook(drop_pending_updates=True)
+
+    # Executa o bot em modo polling
+    logger.info("✅ Bot conectado e em execução.")
+    await app.run_polling()
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(inicializar())
+    except RuntimeError:
+        # Corrige o loop no Python 3.12+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(inicializar())

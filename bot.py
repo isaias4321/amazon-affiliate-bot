@@ -8,9 +8,11 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from colorama import Fore, Style, init
+import nest_asyncio
 
-# Inicializa cores no terminal
+# Inicializa cores e corrige loops assíncronos
 init(autoreset=True)
+nest_asyncio.apply()
 
 # =====================================
 # 🔧 CONFIGURAÇÃO INICIAL
@@ -142,14 +144,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_start_posting(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Inicia o agendamento de postagens automáticas."""
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(lambda: asyncio.create_task(postar_ofertas(context.application)), "interval", minutes=2)
+    loop = asyncio.get_running_loop()
+
+    def job():
+        asyncio.run_coroutine_threadsafe(
+            postar_ofertas(context.application),
+            loop
+        )
+
+    scheduler.add_job(job, "interval", minutes=2)
     scheduler.start()
     await update.message.reply_text("🚀 Postagem automática iniciada!")
 
 
 # =====================================
-# 🏁 INICIALIZAÇÃO DO BOT (VERSÃO FINAL)
+# 🏁 INICIALIZAÇÃO DO BOT
 # =====================================
 logger.info(Fore.CYAN + "🚀 Iniciando bot de ofertas...")
 
@@ -157,13 +168,12 @@ app = Application.builder().token(TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("start_posting", cmd_start_posting))
 
+
+async def main():
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    logger.info(Fore.GREEN + "✅ Bot conectado e em execução.")
+    await app.run_polling()
+
+
 if __name__ == "__main__":
-    import nest_asyncio
-    nest_asyncio.apply()
-
-    async def main():
-        await app.bot.delete_webhook(drop_pending_updates=True)
-        logger.info(Fore.GREEN + "✅ Bot conectado e em execução.")
-        await app.run_polling()
-
     asyncio.run(main())

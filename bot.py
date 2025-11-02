@@ -1,5 +1,5 @@
 # =======================================
-# 🤖 BOT DE OFERTAS — MERCADO LIVRE + SHOPEE (VERSÃO FINAL ESTÁVEL)
+# 🤖 BOT DE OFERTAS — MERCADO LIVRE + SHOPEE (VERSÃO FINAL FUNCIONAL)
 # =======================================
 import os
 import random
@@ -9,6 +9,7 @@ import aiohttp
 import hmac
 import hashlib
 import json as _json
+from urllib.parse import quote
 from datetime import datetime, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -80,7 +81,11 @@ def build_keyboard(url: str):
 # ============================
 async def buscar_ofertas_mercadolivre():
     termo = random.choice(CATEGORIAS)
-    base_url = f"https://api.mercadolibre.com/sites/MLB/search?q={termo}&limit=5"
+    termo_encoded = quote(termo)
+    base_url = (
+        f"https://api.mercadolibre.com/sites/MLB/search?q={termo_encoded}"
+        f"&limit=5&sort=price_asc&condition=new"
+    )
     proxy_url = f"https://api.allorigins.win/get?url={base_url}"
 
     try:
@@ -95,6 +100,7 @@ async def buscar_ofertas_mercadolivre():
                     logger.warning(Fore.YELLOW + "[ML] Nenhum conteúdo retornado pelo proxy.")
                     return []
                 results = _json.loads(contents).get("results", [])
+                logger.info(Fore.BLUE + f"[ML] Recebidos {len(results)} resultados brutos.")
                 ofertas = []
                 for r in results:
                     titulo = r.get("title")
@@ -102,7 +108,7 @@ async def buscar_ofertas_mercadolivre():
                         continue
                     link = f"{r['permalink']}?matt_tool={MELI_MATT_TOOL}&matt_word={MELI_MATT_WORD}"
                     ofertas.append({"titulo": titulo, "preco": r["price"], "link": link})
-                logger.info(Fore.GREEN + f"[ML] {len(ofertas)} ofertas encontradas.")
+                logger.info(Fore.GREEN + f"[ML] {len(ofertas)} ofertas válidas encontradas.")
                 return ofertas
     except Exception as e:
         logger.error(Fore.RED + f"Erro Mercado Livre: {e}")
@@ -144,6 +150,7 @@ async def buscar_ofertas_shopee():
                     return []
                 data = await resp.json()
                 items = data.get("data", {}).get("list", [])
+                logger.info(Fore.BLUE + f"[Shopee] Recebidos {len(items)} resultados brutos.")
                 ofertas = []
                 for item in items:
                     titulo = item.get("name")
@@ -151,9 +158,9 @@ async def buscar_ofertas_shopee():
                         continue
                     link = item.get("short_url") or item.get("offer_link")
                     if SHOPEE_AFIL:
-                        link = f"{SHOPEE_AFIL}"
+                        link = SHOPEE_AFIL
                     ofertas.append({"titulo": titulo, "preco": item.get("price"), "link": link})
-                logger.info(Fore.GREEN + f"[Shopee] {len(ofertas)} ofertas encontradas.")
+                logger.info(Fore.GREEN + f"[Shopee] {len(ofertas)} ofertas válidas encontradas.")
                 return ofertas
     except Exception as e:
         logger.error(Fore.RED + f"Erro Shopee: {e}")

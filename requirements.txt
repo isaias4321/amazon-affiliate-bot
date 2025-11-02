@@ -4,3 +4,5 @@ aiohttp==3.10.5
 colorama==0.4.6
 nest_asyncio==1.6.0
 python-dotenv==1.0.1
+flask
+requests

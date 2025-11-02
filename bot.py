@@ -281,8 +281,16 @@ async def main():
     await app.bot.set_webhook(webhook_url)
     logger.info(Fore.CYAN + f"🌐 Webhook configurado: {webhook_url}")
 
+    # Executa servidor webhook
     await app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         url_path=TOKEN,
-        webhook_url=webhook_url,
+        webhook_url=webhook_url
+    )
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info(Style.DIM + "Bot encerrado.")

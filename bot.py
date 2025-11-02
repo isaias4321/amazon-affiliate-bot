@@ -1,5 +1,5 @@
 # =======================================
-# 🤖 BOT DE OFERTAS — MERCADO LIVRE + SHOPEE (COM FALLBACK)
+# 🤖 BOT DE OFERTAS — MERCADO LIVRE + SHOPEE (VERSÃO FINAL COM PROXY)
 # =======================================
 import os
 import random
@@ -75,11 +75,12 @@ def build_keyboard(url: str):
 
 
 # ============================
-# 🛍️ MERCADO LIVRE
+# 🛍️ MERCADO LIVRE (via proxy Codetabs)
 # ============================
 async def buscar_ofertas_mercadolivre():
     termo = random.choice(CATEGORIAS)
-    url = f"https://api.mercadolibre.com/sites/MLB/search?q={termo}&limit=5"
+    original_url = f"https://api.mercadolibre.com/sites/MLB/search?q={termo}&limit=5"
+    url = f"https://api.codetabs.com/v1/proxy?quest={original_url}"
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -93,6 +94,7 @@ async def buscar_ofertas_mercadolivre():
                     logger.error(Fore.RED + f"[ML] HTTP {resp.status}")
                     return []
                 data = await resp.json()
+                # Codetabs já retorna o JSON original, então pegamos direto
                 results = data.get("results", [])
                 ofertas = []
                 for r in results:
@@ -109,7 +111,7 @@ async def buscar_ofertas_mercadolivre():
 
 
 # ============================
-# 🟠 SHOPEE
+# 🟠 SHOPEE (com fallback automático)
 # ============================
 async def buscar_ofertas_shopee():
     termo = random.choice(CATEGORIAS)
@@ -163,7 +165,7 @@ async def buscar_ofertas_shopee():
 
 
 # ============================
-# 📢 POSTAGENS
+# 📢 POSTAGENS AUTOMÁTICAS
 # ============================
 async def postar_ofertas(app):
     origem = STATE["proximo"]
@@ -176,7 +178,7 @@ async def postar_ofertas(app):
         ofertas = await buscar_ofertas_shopee()
         STATE["proximo"] = "mercadolivre"
 
-    # Fallback automático
+    # Fallback se Shopee não retornar nada
     if not ofertas:
         logger.warning(Fore.YELLOW + "⚠️ Nenhuma oferta encontrada. Tentando fallback Mercado Livre...")
         ofertas = await buscar_ofertas_mercadolivre()

@@ -1,5 +1,5 @@
 # =======================================
-# 🤖 BOT DE OFERTAS — MERCADO LIVRE + SHOPEE (VERSÃO FINAL COM PROXY)
+# 🤖 BOT DE OFERTAS — MERCADO LIVRE + SHOPEE (VERSÃO FINAL ESTÁVEL)
 # =======================================
 import os
 import random
@@ -8,6 +8,7 @@ import asyncio
 import aiohttp
 import hmac
 import hashlib
+import json as _json
 from datetime import datetime, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -40,6 +41,7 @@ PORT = int(os.getenv("PORT", 8080))
 # Shopee
 SHOPEE_APP_ID = os.getenv("SHOPEE_APP_ID")
 SHOPEE_APP_SECRET = os.getenv("SHOPEE_APP_SECRET")
+SHOPEE_AFIL = os.getenv("SHOPEE_AFIL")  # opcional
 
 # Mercado Livre afiliados
 MELI_MATT_TOOL = os.getenv("MELI_MATT_TOOL")
@@ -55,7 +57,6 @@ CATEGORIAS = [
 
 ULTIMOS_TITULOS = set()
 STATE = {"proximo": "mercadolivre"}
-
 
 # ============================
 # 💰 FORMATAÇÃO
@@ -75,27 +76,25 @@ def build_keyboard(url: str):
 
 
 # ============================
-# 🛍️ MERCADO LIVRE (via proxy Codetabs)
+# 🛍️ MERCADO LIVRE (via AllOrigins)
 # ============================
 async def buscar_ofertas_mercadolivre():
     termo = random.choice(CATEGORIAS)
-    original_url = f"https://api.mercadolibre.com/sites/MLB/search?q={termo}&limit=5"
-    url = f"https://api.codetabs.com/v1/proxy?quest={original_url}"
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Accept": "application/json",
-    }
+    base_url = f"https://api.mercadolibre.com/sites/MLB/search?q={termo}&limit=5"
+    proxy_url = f"https://api.allorigins.win/get?url={base_url}"
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as resp:
+            async with session.get(proxy_url) as resp:
                 if resp.status != 200:
                     logger.error(Fore.RED + f"[ML] HTTP {resp.status}")
                     return []
                 data = await resp.json()
-                # Codetabs já retorna o JSON original, então pegamos direto
-                results = data.get("results", [])
+                contents = data.get("contents")
+                if not contents:
+                    logger.warning(Fore.YELLOW + "[ML] Nenhum conteúdo retornado pelo proxy.")
+                    return []
+                results = _json.loads(contents).get("results", [])
                 ofertas = []
                 for r in results:
                     titulo = r.get("title")
@@ -111,7 +110,7 @@ async def buscar_ofertas_mercadolivre():
 
 
 # ============================
-# 🟠 SHOPEE (com fallback automático)
+# 🟠 SHOPEE (com fallback)
 # ============================
 async def buscar_ofertas_shopee():
     termo = random.choice(CATEGORIAS)
@@ -150,13 +149,10 @@ async def buscar_ofertas_shopee():
                     titulo = item.get("name")
                     if not titulo or titulo in ULTIMOS_TITULOS:
                         continue
-                    ofertas.append(
-                        {
-                            "titulo": titulo,
-                            "preco": item.get("price"),
-                            "link": item.get("short_url") or item.get("offer_link"),
-                        }
-                    )
+                    link = item.get("short_url") or item.get("offer_link")
+                    if SHOPEE_AFIL:
+                        link = f"{SHOPEE_AFIL}"
+                    ofertas.append({"titulo": titulo, "preco": item.get("price"), "link": link})
                 logger.info(Fore.GREEN + f"[Shopee] {len(ofertas)} ofertas encontradas.")
                 return ofertas
     except Exception as e:
@@ -165,7 +161,7 @@ async def buscar_ofertas_shopee():
 
 
 # ============================
-# 📢 POSTAGENS AUTOMÁTICAS
+# 📢 POSTAGENS
 # ============================
 async def postar_ofertas(app):
     origem = STATE["proximo"]
@@ -178,7 +174,7 @@ async def postar_ofertas(app):
         ofertas = await buscar_ofertas_shopee()
         STATE["proximo"] = "mercadolivre"
 
-    # Fallback se Shopee não retornar nada
+    # Fallback automático
     if not ofertas:
         logger.warning(Fore.YELLOW + "⚠️ Nenhuma oferta encontrada. Tentando fallback Mercado Livre...")
         ofertas = await buscar_ofertas_mercadolivre()

@@ -1,4 +1,6 @@
-# bot.py
+# =======================================
+# 🤖 BOT DE OFERTAS — MERCADO LIVRE + SHOPEE (COM FALLBACK)
+# =======================================
 import os
 import random
 import logging
@@ -14,9 +16,9 @@ from colorama import Fore, Style, init
 from dotenv import load_dotenv
 import nest_asyncio
 
-# ===========================
-# Inicialização
-# ===========================
+# ============================
+# 🧩 INICIALIZAÇÃO
+# ============================
 load_dotenv()
 init(autoreset=True)
 nest_asyncio.apply()
@@ -27,17 +29,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ofertas-bot")
 
-# ===========================
-# Configurações
-# ===========================
+# ============================
+# 🔧 CONFIGURAÇÕES
+# ============================
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 WEBHOOK_BASE = os.getenv("WEBHOOK_BASE")
 PORT = int(os.getenv("PORT", 8080))
 
 # Shopee
-SHOPEE_PARTNER_ID = os.getenv("SHOPEE_APP_ID")
-SHOPEE_PARTNER_KEY = os.getenv("SHOPEE_APP_SECRET")
+SHOPEE_APP_ID = os.getenv("SHOPEE_APP_ID")
+SHOPEE_APP_SECRET = os.getenv("SHOPEE_APP_SECRET")
 
 # Mercado Livre afiliados
 MELI_MATT_TOOL = os.getenv("MELI_MATT_TOOL")
@@ -51,18 +53,13 @@ CATEGORIAS = [
     "ferramentas",
 ]
 
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605.1.15",
-    "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/122.0",
-]
-
 ULTIMOS_TITULOS = set()
 STATE = {"proximo": "mercadolivre"}
 
-# ===========================
-# Utilitários
-# ===========================
+
+# ============================
+# 💰 FORMATAÇÃO
+# ============================
 def brl(valor):
     try:
         n = float(valor)
@@ -72,17 +69,20 @@ def brl(valor):
     except Exception:
         return str(valor)
 
+
 def build_keyboard(url: str):
     return InlineKeyboardMarkup([[InlineKeyboardButton("Ver oferta 🔗", url=url)]])
 
-# ===========================
-# Mercado Livre via Proxy (sem bloqueio)
-# ===========================
+
+# ============================
+# 🛍️ MERCADO LIVRE
+# ============================
 async def buscar_ofertas_mercadolivre():
     termo = random.choice(CATEGORIAS)
-    url = f"https://api.allorigins.win/get?url=https://api.mercadolibre.com/sites/MLB/search?q={termo}&limit=3"
+    url = f"https://api.mercadolibre.com/sites/MLB/search?q={termo}&limit=5"
+
     headers = {
-        "User-Agent": random.choice(USER_AGENTS),
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "Accept": "application/json",
     }
 
@@ -92,33 +92,30 @@ async def buscar_ofertas_mercadolivre():
                 if resp.status != 200:
                     logger.error(Fore.RED + f"[ML] HTTP {resp.status}")
                     return []
-                raw = await resp.json()
-                data = raw.get("contents")
-                if not data:
-                    return []
-                import json as _json
-                data = _json.loads(data)
+                data = await resp.json()
                 results = data.get("results", [])
                 ofertas = []
                 for r in results:
-                    titulo = r["title"]
-                    if titulo in ULTIMOS_TITULOS:
+                    titulo = r.get("title")
+                    if not titulo or titulo in ULTIMOS_TITULOS:
                         continue
                     link = f"{r['permalink']}?matt_tool={MELI_MATT_TOOL}&matt_word={MELI_MATT_WORD}"
                     ofertas.append({"titulo": titulo, "preco": r["price"], "link": link})
+                logger.info(Fore.GREEN + f"[ML] {len(ofertas)} ofertas encontradas.")
                 return ofertas
     except Exception as e:
         logger.error(Fore.RED + f"Erro Mercado Livre: {e}")
         return []
 
-# ===========================
-# Shopee (assinatura HMAC)
-# ===========================
+
+# ============================
+# 🟠 SHOPEE
+# ============================
 async def buscar_ofertas_shopee():
     termo = random.choice(CATEGORIAS)
     timestamp = int(datetime.now(timezone.utc).timestamp())
-    partner_id = str(SHOPEE_PARTNER_ID)
-    partner_key = SHOPEE_PARTNER_KEY
+    partner_id = str(SHOPEE_APP_ID)
+    partner_key = SHOPEE_APP_SECRET
     api_path = "/api/v1/offer/product_offer"
 
     base_string = f"{partner_id}{api_path}{timestamp}"
@@ -136,7 +133,7 @@ async def buscar_ofertas_shopee():
         "X-Sign": sign,
     }
 
-    payload = {"page_size": 3, "page": 1, "keyword": termo}
+    payload = {"page_size": 5, "page": 1, "keyword": termo}
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -158,14 +155,16 @@ async def buscar_ofertas_shopee():
                             "link": item.get("short_url") or item.get("offer_link"),
                         }
                     )
+                logger.info(Fore.GREEN + f"[Shopee] {len(ofertas)} ofertas encontradas.")
                 return ofertas
     except Exception as e:
         logger.error(Fore.RED + f"Erro Shopee: {e}")
         return []
 
-# ===========================
-# Postagens
-# ===========================
+
+# ============================
+# 📢 POSTAGENS
+# ============================
 async def postar_ofertas(app):
     origem = STATE["proximo"]
     logger.info(Fore.CYAN + f"🔁 Rodada: {origem.upper()}")
@@ -177,8 +176,13 @@ async def postar_ofertas(app):
         ofertas = await buscar_ofertas_shopee()
         STATE["proximo"] = "mercadolivre"
 
+    # Fallback automático
     if not ofertas:
-        logger.info(Fore.YELLOW + "⚠️ Nenhuma oferta encontrada.")
+        logger.warning(Fore.YELLOW + "⚠️ Nenhuma oferta encontrada. Tentando fallback Mercado Livre...")
+        ofertas = await buscar_ofertas_mercadolivre()
+
+    if not ofertas:
+        logger.info(Fore.YELLOW + "⚠️ Nenhuma oferta disponível nesta rodada.")
         return
 
     for o in ofertas:
@@ -198,9 +202,10 @@ async def postar_ofertas(app):
         except Exception as e:
             logger.error(Fore.RED + f"Erro ao enviar mensagem: {e}")
 
-# ===========================
-# Comando /start
-# ===========================
+
+# ============================
+# 💬 COMANDO /start
+# ============================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_html(
         "🤖 <b>Bot de Ofertas Ativo!</b>\n"
@@ -209,9 +214,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Categorias: eletrodomésticos, peças de computador, notebooks, celulares, ferramentas."
     )
 
-# ===========================
-# Inicialização Railway
-# ===========================
+
+# ============================
+# 🚀 INICIALIZAÇÃO (RAILWAY)
+# ============================
 async def main():
     if not TOKEN or not CHAT_ID or not WEBHOOK_BASE:
         raise RuntimeError("⚠️ TELEGRAM_TOKEN, CHAT_ID ou WEBHOOK_BASE não configurados!")
@@ -228,7 +234,6 @@ async def main():
     def schedule_job():
         asyncio.run_coroutine_threadsafe(job(), loop)
 
-    # 1 minuto
     scheduler.add_job(schedule_job, "interval", minutes=1)
     scheduler.start()
     logger.info(Fore.GREEN + "🗓️ Agendador iniciado (1 min).")
@@ -243,6 +248,7 @@ async def main():
         url_path=TOKEN,
         webhook_url=webhook_url,
     )
+
 
 if __name__ == "__main__":
     try:

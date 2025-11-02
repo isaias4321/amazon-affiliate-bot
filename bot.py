@@ -24,10 +24,12 @@ logging.basicConfig(
 logger = logging.getLogger("ofertas-bot")
 
 # =====================================
-# Variáveis de Ambiente
+# Variáveis de ambiente
 # =====================================
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+WEBHOOK_BASE = os.getenv("WEBHOOK_BASE")
+PORT = int(os.getenv("PORT", 8080))
 
 # Mercado Livre
 ML_CLIENT_ID = os.getenv("ML_CLIENT_ID")
@@ -50,11 +52,10 @@ CATEGORIAS = [
     "ferramentas",
 ]
 
-# Evitar duplicados recentes
+# Controle de cache e alternância
 ULTIMOS_TITULOS = set()
 MAX_CACHE_TITULOS = 100
-
-STATE = {"proximo": "mercadolivre"}  # alterna entre Shopee e ML
+STATE = {"proximo": "mercadolivre"}
 
 # =====================================
 # Utilitários
@@ -68,16 +69,12 @@ def brl(valor):
     except Exception:
         return str(valor)
 
-
 def clear_cache():
     if len(ULTIMOS_TITULOS) > MAX_CACHE_TITULOS:
         ULTIMOS_TITULOS.clear()
 
-
 def build_keyboard(url: str):
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(text="Ver oferta 🔗", url=url)]]
-    )
+    return InlineKeyboardMarkup([[InlineKeyboardButton("Ver oferta 🔗", url=url)]])
 
 # =====================================
 # Mercado Livre
@@ -93,9 +90,8 @@ async def renovar_token_mercadolivre():
         "refresh_token": ML_REFRESH_TOKEN,
     }
 
-    headers = {"Content-Type": "application/json"}
     async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload, headers=headers) as resp:
+        async with session.post(url, json=payload) as resp:
             data = await resp.json()
             if resp.status != 200:
                 logger.error(Fore.RED + f"Erro ao renovar token ML: {data}")
@@ -106,7 +102,6 @@ async def renovar_token_mercadolivre():
             os.environ["ML_REFRESH_TOKEN"] = ML_REFRESH_TOKEN
             logger.info(Fore.GREEN + "🔑 Token Mercado Livre renovado com sucesso!")
 
-
 async def buscar_ofertas_mercadolivre():
     """Busca produtos do Mercado Livre."""
     termo = random.choice(CATEGORIAS)
@@ -114,7 +109,7 @@ async def buscar_ofertas_mercadolivre():
     params = {"q": termo, "limit": 3}
     headers = {
         "Authorization": f"Bearer {ML_ACCESS_TOKEN}",
-        "User-Agent": "Mozilla/5.0 (compatible; OfertasBot/1.0)"
+        "User-Agent": "Mozilla/5.0 (compatible; OfertasBot/1.0)",
     }
 
     async with aiohttp.ClientSession() as session:
@@ -124,7 +119,7 @@ async def buscar_ofertas_mercadolivre():
                 await renovar_token_mercadolivre()
                 return await buscar_ofertas_mercadolivre()
             if resp.status != 200:
-                logger.error(Fore.RED + f"[ML] Erro HTTP {resp.status}")
+                logger.error(Fore.RED + f"[ML] HTTP {resp.status}")
                 return []
 
             data = await resp.json()
@@ -134,14 +129,8 @@ async def buscar_ofertas_mercadolivre():
                 titulo = r["title"]
                 if titulo in ULTIMOS_TITULOS:
                     continue
-                link = (
-                    f"{r['permalink']}?matt_tool={MELI_MATT_TOOL}&matt_word={MELI_MATT_WORD}"
-                )
-                ofertas.append({
-                    "titulo": titulo,
-                    "preco": r["price"],
-                    "link": link
-                })
+                link = f"{r['permalink']}?matt_tool={MELI_MATT_TOOL}&matt_word={MELI_MATT_WORD}"
+                ofertas.append({"titulo": titulo, "preco": r["price"], "link": link})
             return ofertas
 
 # =====================================
@@ -158,18 +147,12 @@ async def buscar_ofertas_shopee():
         "Authorization": f"Bearer {SHOPEE_APP_SECRET}",
         "X-Appid": str(SHOPEE_APP_ID),
     }
-
-    payload = {
-        "page_size": 3,
-        "page": 1,
-        "keyword": termo,
-        "timestamp": ts,
-    }
+    payload = {"page_size": 3, "page": 1, "keyword": termo, "timestamp": ts}
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=payload, headers=headers) as resp:
             if resp.status != 200:
-                logger.error(Fore.RED + f"[Shopee] Erro HTTP {resp.status}")
+                logger.error(Fore.RED + f"[Shopee] HTTP {resp.status}")
                 return []
 
             data = await resp.json()
@@ -179,22 +162,22 @@ async def buscar_ofertas_shopee():
                 titulo = item.get("name")
                 if not titulo or titulo in ULTIMOS_TITULOS:
                     continue
-                ofertas.append({
-                    "titulo": titulo,
-                    "preco": item.get("price"),
-                    "link": item.get("short_url") or item.get("offer_link")
-                })
+                ofertas.append(
+                    {
+                        "titulo": titulo,
+                        "preco": item.get("price"),
+                        "link": item.get("short_url") or item.get("offer_link"),
+                    }
+                )
             return ofertas
 
 # =====================================
-# Envio e Alternância
+# Postagens
 # =====================================
 async def postar_ofertas(app):
-    """Alterna entre Shopee e Mercado Livre a cada execução."""
     origem = STATE["proximo"]
-    logger.info(Fore.CYAN + f"🔁 Rodada de ofertas: {origem.upper()}")
+    logger.info(Fore.CYAN + f"🔁 Rodada: {origem.upper()}")
 
-    ofertas = []
     if origem == "mercadolivre":
         ofertas = await buscar_ofertas_mercadolivre()
         STATE["proximo"] = "shopee"
@@ -216,7 +199,7 @@ async def postar_ofertas(app):
                 chat_id=CHAT_ID,
                 text=msg,
                 parse_mode="HTML",
-                reply_markup=build_keyboard(o["link"])
+                reply_markup=build_keyboard(o["link"]),
             )
             ULTIMOS_TITULOS.add(titulo)
             logger.info(Fore.GREEN + f"✅ Enviado: {titulo}")
@@ -226,28 +209,27 @@ async def postar_ofertas(app):
     clear_cache()
 
 # =====================================
-# Comandos do Bot
+# Comandos
 # =====================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_html(
-        "🤖 <b>Bot de Ofertas ativo!</b>\n"
-        "Postando automaticamente a cada 1 minuto, alternando entre:\n"
+        "🤖 <b>Bot de Ofertas Ativo!</b>\n"
+        "Postagens automáticas a cada 1 minuto, alternando entre:\n"
         "🟡 Mercado Livre e 🟠 Shopee\n\n"
         "Categorias: eletrodomésticos, peças de computador, notebooks, celulares, ferramentas."
     )
 
 # =====================================
-# Inicialização
+# Inicialização com Webhook (Railway)
 # =====================================
 async def main():
-    if not TOKEN or not CHAT_ID:
-        raise RuntimeError("TELEGRAM_TOKEN e/ou CHAT_ID não configurados.")
-
-    logger.info(Fore.CYAN + "🚀 Iniciando bot...")
+    if not TOKEN or not CHAT_ID or not WEBHOOK_BASE:
+        raise RuntimeError("⚠️ TELEGRAM_TOKEN, CHAT_ID ou WEBHOOK_BASE não configurados!")
 
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
 
+    # Agendador (1 min)
     scheduler = AsyncIOScheduler()
     loop = asyncio.get_running_loop()
 
@@ -261,8 +243,18 @@ async def main():
     scheduler.start()
     logger.info(Fore.GREEN + "🗓️ Agendador iniciado (1 min).")
 
-    await app.bot.delete_webhook(drop_pending_updates=True)
-    await app.run_polling()
+    # Configuração do Webhook
+    webhook_url = f"{WEBHOOK_BASE}/{TOKEN}"
+    await app.bot.set_webhook(webhook_url)
+    logger.info(Fore.CYAN + f"🌐 Webhook configurado: {webhook_url}")
+
+    # Executa servidor webhook
+    await app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=TOKEN,
+        webhook_url=webhook_url,
+    )
 
 if __name__ == "__main__":
     try:

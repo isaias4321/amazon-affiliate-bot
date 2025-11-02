@@ -4,6 +4,8 @@ import random
 import logging
 import asyncio
 import aiohttp
+import hmac
+import hashlib
 from datetime import datetime, timezone
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -42,8 +44,8 @@ MELI_MATT_TOOL = os.getenv("MELI_MATT_TOOL")
 MELI_MATT_WORD = os.getenv("MELI_MATT_WORD")
 
 # Shopee
-SHOPEE_APP_ID = os.getenv("SHOPEE_APP_ID")
-SHOPEE_APP_SECRET = os.getenv("SHOPEE_APP_SECRET")
+SHOPEE_PARTNER_ID = os.getenv("SHOPEE_APP_ID")
+SHOPEE_PARTNER_KEY = os.getenv("SHOPEE_APP_SECRET")
 
 # Categorias desejadas
 CATEGORIAS = [
@@ -79,69 +81,17 @@ def build_keyboard(url: str):
     return InlineKeyboardMarkup([[InlineKeyboardButton("Ver oferta 🔗", url=url)]])
 
 # =====================================
-# Mercado Livre — renovação automática
-# =====================================
-async def renovar_token_mercadolivre():
-    """Renova o token do Mercado Livre automaticamente e salva no .env."""
-    global ML_ACCESS_TOKEN, ML_REFRESH_TOKEN
-    url = "https://api.mercadolibre.com/oauth/token"
-    payload = {
-        "grant_type": "refresh_token",
-        "client_id": ML_CLIENT_ID,
-        "client_secret": ML_CLIENT_SECRET,
-        "refresh_token": ML_REFRESH_TOKEN,
-    }
-
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload) as resp:
-            data = await resp.json()
-            if resp.status != 200:
-                logger.error(Fore.RED + f"Erro ao renovar token ML: {data}")
-                return
-
-            ML_ACCESS_TOKEN = data.get("access_token")
-            ML_REFRESH_TOKEN = data.get("refresh_token")
-
-            os.environ["ML_ACCESS_TOKEN"] = ML_ACCESS_TOKEN
-            os.environ["ML_REFRESH_TOKEN"] = ML_REFRESH_TOKEN
-
-            # Atualiza o .env local
-            try:
-                with open(".env", "r", encoding="utf-8") as f:
-                    env_lines = f.readlines()
-            except FileNotFoundError:
-                env_lines = []
-
-            new_lines = []
-            keys_to_update = {
-                "ML_ACCESS_TOKEN": ML_ACCESS_TOKEN,
-                "ML_REFRESH_TOKEN": ML_REFRESH_TOKEN,
-            }
-            for line in env_lines:
-                key = line.split("=")[0].strip()
-                if key in keys_to_update:
-                    new_lines.append(f"{key}={keys_to_update[key]}\n")
-                    keys_to_update.pop(key)
-                else:
-                    new_lines.append(line)
-
-            for k, v in keys_to_update.items():
-                new_lines.append(f"{k}={v}\n")
-
-            with open(".env", "w", encoding="utf-8") as f:
-                f.writelines(new_lines)
-
-            logger.info(Fore.GREEN + "🔑 Token Mercado Livre renovado e salvo no .env!")
-
-# =====================================
-# Mercado Livre — busca (sem token)
+# Mercado Livre — busca pública
 # =====================================
 async def buscar_ofertas_mercadolivre():
     """Busca produtos do Mercado Livre (API pública, sem token)."""
     termo = random.choice(CATEGORIAS)
     url = "https://api.mercadolibre.com/sites/MLB/search"
     params = {"q": termo, "limit": 3}
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; OfertasBot/1.0)"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:115.0) Gecko/20100101 Firefox/115.0",
+        "Accept": "application/json",
+    }
 
     async with aiohttp.ClientSession() as session:
         async with session.get(url, params=params, headers=headers) as resp:
@@ -167,23 +117,36 @@ async def buscar_ofertas_mercadolivre():
             return ofertas
 
 # =====================================
-# Shopee — busca
+# Shopee — busca com assinatura HMAC
 # =====================================
 async def buscar_ofertas_shopee():
-    """Busca produtos da Shopee via API de afiliados."""
+    """Busca produtos da Shopee (API BR com assinatura HMAC)."""
     termo = random.choice(CATEGORIAS)
-    ts = int(datetime.now(timezone.utc).timestamp())
-    url = "https://open-api.affiliate.shopee.com.br/api/v1/offer/product_offer"
+    timestamp = int(datetime.now(timezone.utc).timestamp())
+    partner_id = str(SHOPEE_PARTNER_ID)
+    partner_key = SHOPEE_PARTNER_KEY
+    api_path = "/api/v1/offer/product_offer"
 
+    # Cria assinatura (HMAC-SHA256)
+    base_string = f"{partner_id}{api_path}{timestamp}"
+    sign = hmac.new(
+        partner_key.encode("utf-8"),
+        base_string.encode("utf-8"),
+        hashlib.sha256
+    ).hexdigest()
+
+    url = f"https://open-api.affiliate.shopee.com.br{api_path}"
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {SHOPEE_APP_SECRET}",
-        "X-Appid": str(SHOPEE_APP_ID),
+        "X-Appid": partner_id,
+        "X-Timestamp": str(timestamp),
+        "X-Sign": sign,
     }
-    payload = {"page_size": 3, "page": 1, "keyword": termo, "timestamp": ts}
+
+    payload = {"page_size": 3, "page": 1, "keyword": termo}
 
     async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload, headers=headers) as resp:
+        async with session.post(url, headers=headers, json=payload) as resp:
             if resp.status != 200:
                 logger.error(Fore.RED + f"[Shopee] HTTP {resp.status}")
                 return []
@@ -195,17 +158,15 @@ async def buscar_ofertas_shopee():
                 titulo = item.get("name")
                 if not titulo or titulo in ULTIMOS_TITULOS:
                     continue
-                ofertas.append(
-                    {
-                        "titulo": titulo,
-                        "preco": item.get("price"),
-                        "link": item.get("short_url") or item.get("offer_link"),
-                    }
-                )
+                ofertas.append({
+                    "titulo": titulo,
+                    "preco": item.get("price"),
+                    "link": item.get("short_url") or item.get("offer_link"),
+                })
             return ofertas
 
 # =====================================
-# Postagens
+# Postagens automáticas
 # =====================================
 async def postar_ofertas(app):
     origem = STATE["proximo"]

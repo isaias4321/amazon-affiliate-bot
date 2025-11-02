@@ -1,133 +1,54 @@
 # =======================================
-# 🤖 BOT DE OFERTAS — MERCADO LIVRE + SHOPEE (VERSÃO FINAL FUNCIONAL)
+# 🌐 PROXY API — Mercado Livre + Shopee
 # =======================================
-import os
-import random
-import logging
-import asyncio
-import aiohttp
+from flask import Flask, request, jsonify
+import requests
 import hmac
 import hashlib
-import json as _json
-from urllib.parse import quote
-from datetime import datetime, timezone
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from colorama import Fore, Style, init
-from dotenv import load_dotenv
-import nest_asyncio
+import time
+import os
 
-# ============================
-# 🧩 INICIALIZAÇÃO
-# ============================
-load_dotenv()
-init(autoreset=True)
-nest_asyncio.apply()
-
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
-logger = logging.getLogger("ofertas-bot")
+app = Flask(__name__)
 
 # ============================
 # 🔧 CONFIGURAÇÕES
 # ============================
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-WEBHOOK_BASE = os.getenv("WEBHOOK_BASE")
-PORT = int(os.getenv("PORT", 8080))
-
-# Shopee
 SHOPEE_APP_ID = os.getenv("SHOPEE_APP_ID")
 SHOPEE_APP_SECRET = os.getenv("SHOPEE_APP_SECRET")
-SHOPEE_AFIL = os.getenv("SHOPEE_AFIL")  # opcional
 
-# Mercado Livre afiliados
-MELI_MATT_TOOL = os.getenv("MELI_MATT_TOOL")
-MELI_MATT_WORD = os.getenv("MELI_MATT_WORD")
-
-CATEGORIAS = [
-    "eletrodomésticos",
-    "peças de computador",
-    "notebooks",
-    "celulares",
-    "ferramentas",
-]
-
-ULTIMOS_TITULOS = set()
-STATE = {"proximo": "mercadolivre"}
 
 # ============================
-# 💰 FORMATAÇÃO
+# 🟡 MERCADO LIVRE
 # ============================
-def brl(valor):
+@app.route("/proxy/ml")
+def proxy_ml():
+    termo = request.args.get("q", "celulares")
     try:
-        n = float(valor)
-        inteiro, centavos = f"{n:.2f}".split(".")
-        inteiro = f"{int(inteiro):,}".replace(",", ".")
-        return f"R$ {inteiro},{centavos}"
-    except Exception:
-        return str(valor)
-
-
-def build_keyboard(url: str):
-    return InlineKeyboardMarkup([[InlineKeyboardButton("Ver oferta 🔗", url=url)]])
-
-
-# ============================
-# 🛍️ MERCADO LIVRE (via AllOrigins)
-# ============================
-async def buscar_ofertas_mercadolivre():
-    termo = random.choice(CATEGORIAS)
-    termo_encoded = quote(termo)
-    base_url = (
-        f"https://api.mercadolibre.com/sites/MLB/search?q={termo_encoded}"
-        f"&limit=5&sort=price_asc&condition=new"
-    )
-    proxy_url = f"https://api.allorigins.win/get?url={base_url}"
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(proxy_url) as resp:
-                if resp.status != 200:
-                    logger.error(Fore.RED + f"[ML] HTTP {resp.status}")
-                    return []
-                data = await resp.json()
-                contents = data.get("contents")
-                if not contents:
-                    logger.warning(Fore.YELLOW + "[ML] Nenhum conteúdo retornado pelo proxy.")
-                    return []
-                results = _json.loads(contents).get("results", [])
-                logger.info(Fore.BLUE + f"[ML] Recebidos {len(results)} resultados brutos.")
-                ofertas = []
-                for r in results:
-                    titulo = r.get("title")
-                    if not titulo or titulo in ULTIMOS_TITULOS:
-                        continue
-                    link = f"{r['permalink']}?matt_tool={MELI_MATT_TOOL}&matt_word={MELI_MATT_WORD}"
-                    ofertas.append({"titulo": titulo, "preco": r["price"], "link": link})
-                logger.info(Fore.GREEN + f"[ML] {len(ofertas)} ofertas válidas encontradas.")
-                return ofertas
+        url = f"https://api.mercadolibre.com/sites/MLB/search?q={termo}&limit=5&sort=price_asc&condition=new"
+        resp = requests.get(url, timeout=10)
+        if resp.status_code != 200:
+            return jsonify({"error": f"HTTP {resp.status_code}"}), resp.status_code
+        return jsonify(resp.json())
     except Exception as e:
-        logger.error(Fore.RED + f"Erro Mercado Livre: {e}")
-        return []
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================
-# 🟠 SHOPEE (com fallback)
+# 🟠 SHOPEE
 # ============================
-async def buscar_ofertas_shopee():
-    termo = random.choice(CATEGORIAS)
-    timestamp = int(datetime.now(timezone.utc).timestamp())
-    partner_id = str(SHOPEE_APP_ID)
-    partner_key = SHOPEE_APP_SECRET
+@app.route("/proxy/shopee")
+def proxy_shopee():
+    termo = request.args.get("q", "celulares")
+    timestamp = int(time.time())
     api_path = "/api/v1/offer/product_offer"
 
-    base_string = f"{partner_id}{api_path}{timestamp}"
+    if not SHOPEE_APP_ID or not SHOPEE_APP_SECRET:
+        return jsonify({"error": "Shopee não configurado"}), 400
+
+    # Assinatura HMAC
+    base_string = f"{SHOPEE_APP_ID}{api_path}{timestamp}"
     sign = hmac.new(
-        partner_key.encode("utf-8"),
+        SHOPEE_APP_SECRET.encode("utf-8"),
         base_string.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
@@ -135,128 +56,33 @@ async def buscar_ofertas_shopee():
     url = f"https://open-api.affiliate.shopee.com.br{api_path}"
     headers = {
         "Content-Type": "application/json",
-        "X-Appid": partner_id,
+        "X-Appid": str(SHOPEE_APP_ID),
         "X-Timestamp": str(timestamp),
         "X-Sign": sign,
     }
-
     payload = {"page_size": 5, "page": 1, "keyword": termo}
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as resp:
-                if resp.status != 200:
-                    logger.error(Fore.RED + f"[Shopee] HTTP {resp.status}")
-                    return []
-                data = await resp.json()
-                items = data.get("data", {}).get("list", [])
-                logger.info(Fore.BLUE + f"[Shopee] Recebidos {len(items)} resultados brutos.")
-                ofertas = []
-                for item in items:
-                    titulo = item.get("name")
-                    if not titulo or titulo in ULTIMOS_TITULOS:
-                        continue
-                    link = item.get("short_url") or item.get("offer_link")
-                    if SHOPEE_AFIL:
-                        link = SHOPEE_AFIL
-                    ofertas.append({"titulo": titulo, "preco": item.get("price"), "link": link})
-                logger.info(Fore.GREEN + f"[Shopee] {len(ofertas)} ofertas válidas encontradas.")
-                return ofertas
+        resp = requests.post(url, headers=headers, json=payload, timeout=10)
+        if resp.status_code != 200:
+            return jsonify({"error": f"HTTP {resp.status_code}"}), resp.status_code
+        return jsonify(resp.json())
     except Exception as e:
-        logger.error(Fore.RED + f"Erro Shopee: {e}")
-        return []
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================
-# 📢 POSTAGENS
+# 🩵 ROOT TEST
 # ============================
-async def postar_ofertas(app):
-    origem = STATE["proximo"]
-    logger.info(Fore.CYAN + f"🔁 Rodada: {origem.upper()}")
-
-    if origem == "mercadolivre":
-        ofertas = await buscar_ofertas_mercadolivre()
-        STATE["proximo"] = "shopee"
-    else:
-        ofertas = await buscar_ofertas_shopee()
-        STATE["proximo"] = "mercadolivre"
-
-    # Fallback automático
-    if not ofertas:
-        logger.warning(Fore.YELLOW + "⚠️ Nenhuma oferta encontrada. Tentando fallback Mercado Livre...")
-        ofertas = await buscar_ofertas_mercadolivre()
-
-    if not ofertas:
-        logger.info(Fore.YELLOW + "⚠️ Nenhuma oferta disponível nesta rodada.")
-        return
-
-    for o in ofertas:
-        titulo = o["titulo"]
-        if titulo in ULTIMOS_TITULOS:
-            continue
-        msg = f"📦 <b>{titulo}</b>\n💰 <b>{brl(o['preco'])}</b>"
-        try:
-            await app.bot.send_message(
-                chat_id=CHAT_ID,
-                text=msg,
-                parse_mode="HTML",
-                reply_markup=build_keyboard(o["link"]),
-            )
-            ULTIMOS_TITULOS.add(titulo)
-            logger.info(Fore.GREEN + f"✅ Enviado: {titulo}")
-        except Exception as e:
-            logger.error(Fore.RED + f"Erro ao enviar mensagem: {e}")
-
-
-# ============================
-# 💬 COMANDO /start
-# ============================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_html(
-        "🤖 <b>Bot de Ofertas Ativo!</b>\n"
-        "Postagens automáticas a cada 1 minuto alternando entre:\n"
-        "🟡 Mercado Livre e 🟠 Shopee\n\n"
-        "Categorias: eletrodomésticos, peças de computador, notebooks, celulares, ferramentas."
-    )
-
-
-# ============================
-# 🚀 INICIALIZAÇÃO (RAILWAY)
-# ============================
-async def main():
-    if not TOKEN or not CHAT_ID or not WEBHOOK_BASE:
-        raise RuntimeError("⚠️ TELEGRAM_TOKEN, CHAT_ID ou WEBHOOK_BASE não configurados!")
-
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-
-    scheduler = AsyncIOScheduler()
-    loop = asyncio.get_running_loop()
-
-    async def job():
-        await postar_ofertas(app)
-
-    def schedule_job():
-        asyncio.run_coroutine_threadsafe(job(), loop)
-
-    scheduler.add_job(schedule_job, "interval", minutes=1)
-    scheduler.start()
-    logger.info(Fore.GREEN + "🗓️ Agendador iniciado (1 min).")
-
-    webhook_url = f"{WEBHOOK_BASE}/{TOKEN}"
-    await app.bot.set_webhook(webhook_url)
-    logger.info(Fore.CYAN + f"🌐 Webhook configurado: {webhook_url}")
-
-    await app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=TOKEN,
-        webhook_url=webhook_url,
-    )
+@app.route("/")
+def index():
+    return jsonify({
+        "status": "ok",
+        "message": "Proxy ativo ✅",
+        "endpoints": ["/proxy/ml?q=termo", "/proxy/shopee?q=termo"]
+    })
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info(Style.DIM + "Bot encerrado.")
+    port = int(os.getenv("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)

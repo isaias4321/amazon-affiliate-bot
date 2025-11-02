@@ -96,8 +96,8 @@ async def buscar_ofertas_mercadolivre():
                 data = raw.get("contents")
                 if not data:
                     return []
-                import json
-                data = json.loads(data)
+                import json as _json
+                data = _json.loads(data)
                 results = data.get("results", [])
                 ofertas = []
                 for r in results:
@@ -170,12 +170,12 @@ async def postar_ofertas(app):
     origem = STATE["proximo"]
     logger.info(Fore.CYAN + f"🔁 Rodada: {origem.upper()}")
 
-    ofertas = (
-        await buscar_ofertas_mercadolivre()
-        if origem == "mercadolivre"
-        else await buscar_ofertas_shopee()
-    )
-    STATE["proximo"] = "shopee" if origem == "mercadolivre" else "mercadolivre"
+    if origem == "mercadolivre":
+        ofertas = await buscar_ofertas_mercadolivre()
+        STATE["proximo"] = "shopee"
+    else:
+        ofertas = await buscar_ofertas_shopee()
+        STATE["proximo"] = "mercadolivre"
 
     if not ofertas:
         logger.info(Fore.YELLOW + "⚠️ Nenhuma oferta encontrada.")
@@ -213,6 +213,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Inicialização Railway
 # ===========================
 async def main():
+    if not TOKEN or not CHAT_ID or not WEBHOOK_BASE:
+        raise RuntimeError("⚠️ TELEGRAM_TOKEN, CHAT_ID ou WEBHOOK_BASE não configurados!")
+
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
 
@@ -225,6 +228,7 @@ async def main():
     def schedule_job():
         asyncio.run_coroutine_threadsafe(job(), loop)
 
+    # 1 minuto
     scheduler.add_job(schedule_job, "interval", minutes=1)
     scheduler.start()
     logger.info(Fore.GREEN + "🗓️ Agendador iniciado (1 min).")

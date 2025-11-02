@@ -1,6 +1,6 @@
-python-telegram-bot[webhooks]==21.6
-aiohttp==3.10.5
+python-telegram-bot[webhooks]==21.4
 apscheduler==3.10.4
+aiohttp==3.10.5
 colorama==0.4.6
 nest_asyncio==1.6.0
 python-dotenv==1.0.1
